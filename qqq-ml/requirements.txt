@@ -1,0 +1,9 @@
+pandas>=2.2
+numpy>=1.26
+pyarrow>=15.0
+scikit-learn>=1.4
+xgboost>=2.0
+hmmlearn>=0.3
+matplotlib>=3.8
+pytest>=8.0
+# torch: deferred to week 11
