@@ -17,6 +17,9 @@ y_pred_var``.
 """
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -131,3 +134,63 @@ def ljung_box(x, lags: int = 10) -> tuple[float, float]:
     r = acf(x, lags)
     q = n * (n + 2) * np.sum(r ** 2 / (n - np.arange(1, lags + 1)))
     return float(q), float(stats.chi2.sf(q, lags))
+
+
+# --------------------------------------------------------------------------
+# Evaluation slices (config/evaluation.toml)
+# --------------------------------------------------------------------------
+EVAL_CONFIG = Path(__file__).resolve().parents[1] / "config" / "evaluation.toml"
+
+
+def load_eval_config(path: Path = EVAL_CONFIG) -> dict:
+    """Read the fixed evaluation periods and the jump-day rule."""
+    with open(path, "rb") as f:
+        return tomllib.load(f)
+
+
+def jump_days(rv: pd.Series, multiple: float, window: int = 22,
+              min_frac: float = 0.8) -> pd.Series:
+    """Ex-post jump flag: RV(t) > multiple x mean RV of sessions t-window..t-1.
+
+    ``rv`` is a variance series on the full session calendar (NaN on
+    invalid sessions). Evaluation filter only - it uses day t's own RV.
+    """
+    base = rv.shift(1).rolling(window,
+                               min_periods=int(np.ceil(window * min_frac))).mean()
+    return (rv > multiple * base).where(rv.notna() & base.notna())
+
+
+def eval_slices(dates, rv: pd.Series, cfg: dict | None = None) -> pd.DataFrame:
+    """Boolean slice columns for ``dates``: one per period + ``jump_day``.
+
+    Args:
+        dates: dates to label (e.g. the out-of-sample prediction dates).
+        rv: variance series on the full session calendar, used for the
+            jump rule's trailing mean.
+        cfg: parsed ``evaluation.toml`` (default: the project file).
+    """
+    cfg = cfg or load_eval_config()
+    d = pd.DatetimeIndex(dates)
+    out = pd.DataFrame(index=d)
+    for key, p in cfg["periods"].items():
+        out[key] = (d >= pd.Timestamp(p["start"])) & (d <= pd.Timestamp(p["end"]))
+    j = cfg["jump_days"]
+    jd = jump_days(rv, j["multiple"], j["window"])
+    out["jump_day"] = jd.reindex(d).fillna(False).astype(bool).to_numpy()
+    return out
+
+
+def slice_scores(pred: pd.DataFrame, slices: pd.DataFrame,
+                 keys: tuple[str, ...] = ("target", "model")) -> pd.DataFrame:
+    """Scores on every slice column (rows where it is True) plus ``all``."""
+    parts = []
+    s = slices.reindex(pd.DatetimeIndex(pred["date"])).to_numpy()
+    for i, col in enumerate(["all"] + list(slices.columns)):
+        mask = np.ones(len(pred), bool) if col == "all" else s[:, i - 1]
+        sub = pred.loc[mask]
+        if len(sub):
+            parts.append(sub.groupby(list(keys)).apply(score, include_groups=False)
+                         .assign(slice=col))
+    out = pd.concat(parts).set_index("slice", append=True)
+    out["n"] = out["n"].astype(int)
+    return out

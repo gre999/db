@@ -90,3 +90,31 @@ def test_acf_and_ljung_box():
         ar[i] = 0.6 * ar[i - 1] + wn[i]
     assert M.acf(ar, 1)[0] == pytest.approx(0.6, abs=0.05)
     assert M.ljung_box(ar, 10)[1] < 1e-6
+
+
+def test_eval_config_and_slices():
+    cfg = M.load_eval_config()
+    assert set(cfg["periods"]) == {"covid_2020", "tariff_2025"}
+    for p in cfg["periods"].values():
+        assert pd.Timestamp(p["start"]) < pd.Timestamp(p["end"])
+    days = pd.bdate_range("2020-01-02", "2020-06-30")
+    rv = pd.Series(1.0, index=days)
+    rv[pd.Timestamp("2020-03-16")] = 5.0          # 5x the trailing mean
+    rv[pd.Timestamp("2020-03-17")] = 2.1          # trailing mean now > 1.05
+    sl = M.eval_slices(days, rv, cfg)
+    assert sl.loc["2020-02-24", "covid_2020"] and sl.loc["2020-04-30", "covid_2020"]
+    assert not sl.loc["2020-02-21", "covid_2020"]
+    assert not sl.loc["2020-05-01", "covid_2020"]
+    assert sl["jump_day"].sum() == 1 and sl.loc["2020-03-16", "jump_day"]
+    assert not sl["tariff_2025"].any()
+    # First `window` sessions have no trailing mean -> never a jump day.
+    assert not sl["jump_day"].iloc[:17].any()
+
+
+def test_slice_scores():
+    pred = _pred_frame()
+    dates = pd.DatetimeIndex(pred["date"].unique())
+    sl = pd.DataFrame({"s": dates < dates[10]}, index=dates)
+    t = M.slice_scores(pred, sl)
+    assert t.loc[("rv", "good", "all"), "n"] == 100
+    assert t.loc[("rv", "good", "s"), "n"] == int((pred.loc[pred["model"] == "good", "date"] < dates[10]).sum())

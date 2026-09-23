@@ -1,0 +1,29 @@
+# Evaluation slices for weeks 4+.
+#
+# Fixed BEFORE looking at any week-4 model result. Dates come from market
+# events, not from where any model did well or badly. Change only with a
+# written reason (and re-run every report that uses them).
+#
+# All dates are US/Eastern session dates, both ends inclusive.
+
+[periods.covid_2020]
+label = "2020 COVID crash"
+start = "2020-02-24"   # first large sell-off session after the Feb 21 close
+end   = "2020-04-30"   # through the April rebound; RV still elevated
+reason = """Volatility jumps from calm (Feb 21) to the March 16 peak with four \
+market-wide circuit breakers (Mar 9/12/16/18), then decays through April."""
+
+[periods.tariff_2025]
+label = "2025 tariff shock"
+start = "2025-04-03"   # first session after the Apr 2 (after-close) tariff announcement
+end   = "2025-05-09"   # through the 90-day pause (Apr 9) and until the May 12 US-China de-escalation
+reason = """Sudden jump on Apr 3-4, extreme days Apr 7-9 (pause announced Apr 9 13:18 ET), \
+then decay through early May."""
+
+[jump_days]
+# Auxiliary, rule-based slice (ex post; uses the label day's own RV, so it is
+# an evaluation filter only, never a feature):
+#   jump day  <=>  RV(t) > multiple * mean(RV over sessions t-22 .. t-1)
+# RV is the intraday RV of the target being evaluated.
+multiple = 2.0
+window = 22
