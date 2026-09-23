@@ -73,8 +73,9 @@ def main() -> None:
 
     sens = pd.DataFrame([{
         "multiple": k,
-        "jump days (OOS)": int(M.jump_days(rv, k, j["window"]).reindex(oos)
-                               .fillna(False).astype(bool).sum())}
+        "jump days (OOS)": str(int(M.jump_days(rv, k, j["window"])
+                                   .reindex(oos).fillna(False).astype(bool)
+                                   .sum()))}
         for k in (1.5, 2.0, 2.5, 3.0)])
 
     lists = {}
