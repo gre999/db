@@ -611,8 +611,7 @@ def align_prev_close(series: pd.Series, calendar: pd.DatetimeIndex,
     cal = pd.DatetimeIndex(calendar)
     pos = s.index.searchsorted(cal, side="left") - 1   # strictly before t
     ok = pos >= 0
-    src = pd.DatetimeIndex(np.where(ok, s.index.to_numpy()[np.maximum(pos, 0)],
-                                    np.datetime64("NaT")))
+    src = pd.DatetimeIndex(s.index[np.maximum(pos, 0)]).where(ok)
     val = np.where(ok, s.to_numpy()[np.maximum(pos, 0)], np.nan)
     out = pd.DataFrame({"value": val, "source_date": src}, index=cal)
     out["stale_days"] = (out.index - out["source_date"]).dt.days

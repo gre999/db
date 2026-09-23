@@ -5,6 +5,7 @@
 程式：`src/features.py`（特徵、RV）、`src/validation.py`（walk-forward）。
 矩陣：`data/processed/features_prev_close.parquet`、`features_open.parquet`；
 目標（本週不建模，只用於洩漏檢查）：`targets_daily.parquet`。
+檢視結論見 [`week02_review_notes.md`](week02_review_notes.md)。
 
 ## 1. 資訊截止點
 
