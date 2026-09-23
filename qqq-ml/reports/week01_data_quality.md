@@ -1,8 +1,9 @@
 # Week 1 資料品質報告
 
-產生時間：2026-09-23 11:23 ET　·　資料建置：2026-09-23T11:23
+產生時間：2026-09-23 11:47 ET　·　資料建置：2026-09-23T11:23
 
 資料來源：IBKR TWS API（`scripts/download_ibkr.py`）。清理程式：`src/data_loader.py`。
+人工檢視結論見 [`week01_review_notes.md`](week01_review_notes.md)。
 
 ## 1. 總覽
 
