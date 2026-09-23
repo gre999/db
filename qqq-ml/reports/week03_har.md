@@ -1,6 +1,6 @@
 # Week 3 HAR 基準模型
 
-產生時間：2026-09-23 12:43 ET　·　預測存檔：2026-09-23T12:43
+產生時間：2026-09-23 12:48 ET　·　預測存檔：2026-09-23T12:43
 
 程式：`src/models/har.py`、`src/models/base.py`、`src/metrics.py`。
 預測：`data/processed/predictions/har_baselines.parquet`（7,748 列）、
