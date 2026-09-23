@@ -180,12 +180,18 @@ def test_vix_alignment(data, full):
     X = full["prev_close"]
     vi = data.vol_index
     mon = pd.Timestamp("2016-03-28")            # after Good Friday Cboe row
-    assert X.loc[mon, "vix_1d"] == vi.loc[synth.CBOE_ONLY, "vix"]
+    thu = pd.Timestamp("2016-03-24")            # previous exchange session
+    # The Good Friday Cboe close is after the prev_close cutoff (Thu 16:15),
+    # so Monday must use Thursday's close.
+    assert X.loc[mon, "vix_1d"] == vi.loc[thu, "vix"]
+    assert X.loc[mon, "vxn_1d"] == vi.loc[thu, "vxn"]
+    assert vi.loc[thu, "vxn"] != vi.loc[synth.CBOE_ONLY, "vxn"]
     # Last VIX before the gap is > max_stale_days old by the end -> NaN.
     assert np.isnan(X.loc[synth.VIX_GAP[-1], "vix_1d"])
     a = dl.align_prev_close(vi["vix"], data.calendar)
     ok = a["source_date"].notna()
-    assert (a.loc[ok, "source_date"] < a.index[ok]).all()
+    prev = data.calendar.to_series().shift(1)
+    assert (a.loc[ok, "source_date"] <= prev[ok]).all()
 
 
 def test_read_cboe_csv(tmp_path):
@@ -228,7 +234,7 @@ def test_jump_features(data, full):
     assert X.loc[d, "jump_rv_bv_1d"] == pytest.approx(max(rv - bv, 0.0))
     assert (X["jump_rv_bv_1d"].dropna() >= 0).all()
     vi = data.vol_index["vix"]
-    src = vi.index[vi.index < d]
+    src = vi.index[vi.index <= p]
     assert X.loc[d, "vix_chg_1d"] == pytest.approx(
         vi.loc[src[-1]] - vi.loc[src[-2]])
     # BV is jump-robust: on no-jump synthetic data it tracks RV closely.

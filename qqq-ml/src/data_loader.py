@@ -595,12 +595,14 @@ def read_cboe_daily(path: Path) -> pd.DataFrame:
 
 def align_prev_close(series: pd.Series, calendar: pd.DatetimeIndex,
                      max_stale_days: int = 5) -> pd.DataFrame:
-    """For each trading day t, take the last value dated strictly before t.
+    """For each trading day t, the last value dated on/before session t-1.
 
-    This is the value known at the previous close, so it is safe to use as
-    a feature for day t. Cboe and the exchange calendars differ on a few
-    days (e.g. Cboe publishes on some days the stock market is closed), so
-    the lookup is by date, not by row position.
+    ``calendar`` is the exchange schedule; t-1 is the previous session in
+    it. Using "on or before t-1" (not merely "before t") keeps the value
+    inside the ``prev_close`` cutoff even when the source publishes on a
+    day the stock market is closed (e.g. a Cboe close on an exchange
+    holiday between t-1 and t is *not* used for t). The lookup is by date,
+    not by row position. The first calendar day has no t-1 and gets NaN.
 
     Returns:
         DataFrame indexed by ``calendar`` with ``value``, ``source_date``
@@ -609,8 +611,10 @@ def align_prev_close(series: pd.Series, calendar: pd.DatetimeIndex,
     """
     s = series.dropna().sort_index()
     cal = pd.DatetimeIndex(calendar)
-    pos = s.index.searchsorted(cal, side="left") - 1   # strictly before t
-    ok = pos >= 0
+    prev = cal.to_series().shift(1)
+    has_prev = prev.notna().to_numpy()
+    pos = s.index.searchsorted(prev.fillna(cal[0]), side="right") - 1
+    ok = (pos >= 0) & has_prev
     src = pd.DatetimeIndex(s.index[np.maximum(pos, 0)]).where(ok)
     val = np.where(ok, s.to_numpy()[np.maximum(pos, 0)], np.nan)
     out = pd.DataFrame({"value": val, "source_date": src}, index=cal)

@@ -96,8 +96,9 @@ class HARModel(Forecaster):
         n, k = Z.shape
         self.coef_ = pd.Series(beta, index=["const"] + list(self.features))
         self.resid_var_ = float(resid @ resid / (n - k))
-        self.se_ = pd.Series(np.sqrt(np.diag(
-            newey_west_cov(Z, resid, self.nw_lags))), index=self.coef_.index)
+        with np.errstate(invalid="ignore"):   # unidentified coef -> NaN s.e.
+            self.se_ = pd.Series(np.sqrt(np.diag(
+                newey_west_cov(Z, resid, self.nw_lags))), index=self.coef_.index)
         self.r2_ = float(1 - resid @ resid / np.sum((yv - yv.mean()) ** 2))
         self.n_train_ = n
         return self

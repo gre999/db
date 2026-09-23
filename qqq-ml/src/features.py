@@ -111,6 +111,14 @@ def label_time(days: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return (days + pd.to_timedelta(close, unit="m")).tz_localize(dl.ET)
 
 
+def cboe_known_time(dates: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    """When a Cboe daily close becomes known: 16:15 ET, 13:15 on half days."""
+    dates = pd.DatetimeIndex(dates)
+    mins = np.where(dl._half_day_mask(dates), dl.HALF_CLOSE_MIN,
+                    dl.RTH_CLOSE_MIN) + 15
+    return (dates + pd.to_timedelta(mins, unit="m")).tz_localize(dl.ET)
+
+
 # --------------------------------------------------------------------------
 # Inputs
 # --------------------------------------------------------------------------
@@ -151,7 +159,8 @@ class MarketData:
 
         Finished bars (``bar_end <= t_cut``) are kept; a bar in progress
         keeps only its open; Cboe closes count as known at 16:15 ET of
-        their date; dividends are kept up to ``t_cut``'s date.
+        their date (13:15 on half days); dividends are kept up to
+        ``t_cut``'s date.
         """
         b = self.bars5
         done = b[b["bar_end"] <= t_cut]
@@ -163,8 +172,7 @@ class MarketData:
         divs = self.dividends[self.dividends.index <= cut_day]
         vi = None
         if self.vol_index is not None:
-            known = (self.vol_index.index + dl.CBOE_CLOSE_TIME).tz_localize(
-                dl.ET) <= t_cut
+            known = cboe_known_time(self.vol_index.index) <= t_cut
             vi = self.vol_index[known]
         return MarketData(bars, self.calendar, divs, vi)
 
@@ -357,7 +365,7 @@ class FeatureContext:
                              "jump": (rv - bv).clip(lower=0)})
 
     def vol_index_prev(self, name: str, diff: bool = False) -> pd.Series:
-        """Last Cboe close before t (or its change vs the Cboe date before)."""
+        """Last Cboe close on/before t-1 (or its change vs the one before)."""
         vi = self.data.vol_index
         if vi is None or name not in vi:
             raise KeyError(f"vol index {name!r} not loaded")
@@ -470,13 +478,15 @@ def _prev_half(ctx):
     return _half(ctx).shift(1)
 
 
-@register("vix_1d", "prev_close", "VIX close of the last Cboe date before t",
+@register("vix_1d", "prev_close",
+          "VIX close of the last Cboe date on/before session t-1",
           needs=("vix",))
 def _vix(ctx):
     return ctx.vol_index_prev("vix")
 
 
-@register("vxn_1d", "prev_close", "VXN close of the last Cboe date before t",
+@register("vxn_1d", "prev_close",
+          "VXN close of the last Cboe date on/before session t-1",
           needs=("vxn",))
 def _vxn(ctx):
     return ctx.vol_index_prev("vxn")
@@ -496,8 +506,8 @@ def _jump(ctx):
 
 
 @register("vix_chg_1d", "prev_close",
-          "VIX change: last Cboe close before t minus the Cboe close before "
-          "that", needs=("vix",))
+          "VIX change: last Cboe close on/before session t-1 minus the "
+          "Cboe close before that", needs=("vix",))
 def _vix_chg(ctx):
     return ctx.vol_index_prev("vix", diff=True)
 
