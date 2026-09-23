@@ -564,6 +564,77 @@ def build_all(raw_dir: Path = RAW_DIR, out_dir: Path = PROCESSED_DIR,
 
 
 # --------------------------------------------------------------------------
+# External daily data (Cboe volatility indices)
+# --------------------------------------------------------------------------
+CBOE_DIR = PROJECT_ROOT / "data" / "raw" / "cboe"
+CBOE_CLOSE_TIME = pd.Timedelta(hours=16, minutes=15)  # index close, ET
+
+
+def read_cboe_daily(path: Path) -> pd.DataFrame:
+    """Read a Cboe index history CSV (e.g. ``VIX_History.csv``).
+
+    Expected layout (Cboe "daily prices" download): a ``DATE`` column in
+    ``MM/DD/YYYY`` plus ``OPEN, HIGH, LOW, CLOSE``. Header case and extra
+    leading lines are tolerated.
+
+    Returns:
+        DataFrame indexed by naive ``date`` with lower-case
+        open/high/low/close, sorted, duplicates dropped (last kept).
+    """
+    path = Path(path)
+    lines = path.read_text(encoding="utf-8-sig").splitlines()
+    skip = next(i for i, ln in enumerate(lines) if ln.upper().startswith("DATE"))
+    df = pd.read_csv(path, skiprows=skip, encoding="utf-8-sig")
+    df.columns = [c.strip().lower() for c in df.columns]
+    df["date"] = pd.to_datetime(df["date"], format="mixed").dt.normalize()
+    df = df.set_index("date").sort_index()
+    df = df[~df.index.duplicated(keep="last")]
+    cols = [c for c in ("open", "high", "low", "close") if c in df.columns]
+    return df[cols].astype(float)
+
+
+def align_prev_close(series: pd.Series, calendar: pd.DatetimeIndex,
+                     max_stale_days: int = 5) -> pd.DataFrame:
+    """For each trading day t, take the last value dated strictly before t.
+
+    This is the value known at the previous close, so it is safe to use as
+    a feature for day t. Cboe and the exchange calendars differ on a few
+    days (e.g. Cboe publishes on some days the stock market is closed), so
+    the lookup is by date, not by row position.
+
+    Returns:
+        DataFrame indexed by ``calendar`` with ``value``, ``source_date``
+        and ``stale_days`` (calendar days between source_date and t). Values
+        older than ``max_stale_days`` are set to NaN.
+    """
+    s = series.dropna().sort_index()
+    cal = pd.DatetimeIndex(calendar)
+    pos = s.index.searchsorted(cal, side="left") - 1   # strictly before t
+    ok = pos >= 0
+    src = pd.DatetimeIndex(np.where(ok, s.index.to_numpy()[np.maximum(pos, 0)],
+                                    np.datetime64("NaT")))
+    val = np.where(ok, s.to_numpy()[np.maximum(pos, 0)], np.nan)
+    out = pd.DataFrame({"value": val, "source_date": src}, index=cal)
+    out["stale_days"] = (out.index - out["source_date"]).dt.days
+    out.loc[out["stale_days"] > max_stale_days, "value"] = np.nan
+    return out
+
+
+def load_cboe(names: tuple[str, ...] = ("VIX", "VXN"),
+              cboe_dir: Path = CBOE_DIR) -> pd.DataFrame:
+    """Close prices of Cboe indices, one column per name (lower case).
+
+    Reads ``<cboe_dir>/<NAME>_History.csv``. Missing files raise
+    ``FileNotFoundError`` so absent inputs never pass silently.
+    """
+    cols = {}
+    for n in names:
+        cols[n.lower()] = read_cboe_daily(Path(cboe_dir) / f"{n}_History.csv")[
+            "close"]
+    return pd.DataFrame(cols)
+
+
+# --------------------------------------------------------------------------
 # Loaders for downstream code
 # --------------------------------------------------------------------------
 def _load(name: str, processed_dir: Path, exclude_half_days: bool,

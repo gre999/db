@@ -19,12 +19,20 @@ py -3.12 -m venv .venv
 
 :: 3. 產生 reports\week01_data_quality.md 與圖表
 .venv\Scripts\python scripts\make_week01_report.py
+
+:: 4.（第 2 週）VIX_History.csv、VXN_History.csv 放到 data\raw\cboe\ 後建特徵矩陣
+.venv\Scripts\python -m src.features
+.venv\Scripts\python scripts\make_week02_report.py
 ```
 
 下游程式讀資料：
 ```python
 from src.data_loader import load_minute_rth, load_5min, load_daily, load_extended
 bars = load_5min(exclude_half_days=True)   # ts = bar 開始；bar_end 之後才可使用
+
+X = pd.read_parquet("data/processed/features_prev_close.parquet")  # 前一日收盤可知
+from src.validation import WalkForwardSplit, make_pipeline, walk_forward_predict
+print(WalkForwardSplit().describe(X.dropna().index))
 ```
 
 ## 結構
