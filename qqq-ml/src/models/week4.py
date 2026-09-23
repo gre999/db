@@ -1,4 +1,5 @@
-"""Week 4: HAR-X, XGBoost and random forest vs the week-3 HAR baseline.
+"""Week 4: HAR-X, XGBoost, random forest and a HAR+residual-XGB model vs the
+week-3 HAR baseline.
 
 * Target: log RV of day t (intraday RV, the main target), features from the
   ``prev_close`` matrix (known at t-1's close).
@@ -7,11 +8,14 @@
   :mod:`src.models.trees`).
 * HAR and random-walk forecasts are *read* from ``har_baselines.parquet``,
   never retrained.
+* ``har_resid_xgb`` (:mod:`src.models.residual`) lets HAR carry the
+  extrapolation and has XGBoost correct only its residual, so it isn't
+  capped at the top of the training range the way plain XGBoost is.
 
 Outputs in ``data/processed/predictions/`` (same format as
 ``har_baselines.parquet``)::
 
-    week4_models.parquet               harx / xgb / rf predictions
+    week4_models.parquet               harx / xgb / rf / har_resid_xgb predictions
     week4_models_params.parquet        chosen hyper-parameters per fold
     week4_models_grid.parquet          every grid point's validation score
     week4_models_coefficients.parquet  HAR-X coefficients per fold
@@ -32,7 +36,8 @@ import pandas as pd
 from src import data_loader as dl
 from src import metrics as M
 from src.models.base import load_dataset, run_walk_forward, save_predictions
-from src.models.har import harx_model
+from src.models.har import HARModel, harx_model
+from src.models.residual import HARResidual
 from src.models.trees import (TREE_FEATURES, RFModel, XGBModel,
                               permutation_importance)
 from src.validation import WalkForwardSplit
@@ -43,7 +48,8 @@ MIN_SLICE_ROWS = 15
 
 
 def week4_models() -> dict:
-    return {"harx": harx_model(), "xgb": XGBModel(), "rf": RFModel()}
+    return {"harx": harx_model(), "xgb": XGBModel(), "rf": RFModel(),
+            "har_resid_xgb": HARResidual(har=HARModel(), tree=XGBModel())}
 
 
 def run(splitter: WalkForwardSplit = WalkForwardSplit(), target: str = "rv",

@@ -30,11 +30,12 @@ from src import metrics as M  # noqa: E402
 from src.models.base import PRED_DIR, load_predictions  # noqa: E402
 
 REPORTS = ROOT / "reports"
-AQUA, YELLOW = "#1baf7a", "#eda100"
-MODELS = ["rw", "har", "harx", "xgb", "rf"]
+AQUA, YELLOW, MAGENTA = "#1baf7a", "#eda100", "#c23b6b"
+MODELS = ["rw", "har", "harx", "xgb", "har_resid_xgb", "rf"]
 LABEL = {"rw": "Random walk", "har": "HAR", "harx": "HAR-X", "xgb": "XGBoost",
-         "rf": "Random forest"}
-COLOR = {"har": BLUE, "xgb": ORANGE, "harx": AQUA, "rf": YELLOW}
+         "rf": "Random forest", "har_resid_xgb": "HAR+Resid"}
+COLOR = {"har": BLUE, "xgb": ORANGE, "harx": AQUA, "rf": YELLOW,
+         "har_resid_xgb": MAGENTA}
 SLICES = ["covid_2020", "tariff_2025", "jump_day"]
 
 
@@ -58,7 +59,7 @@ def losses(pred: pd.DataFrame) -> pd.DataFrame:
 def dm_table(p: pd.DataFrame, slices: pd.DataFrame) -> pd.DataFrame:
     rows = []
     har = p[p["model"] == "har"].set_index("date")
-    for m in ["rw", "harx", "xgb", "rf"]:
+    for m in ["rw", "harx", "xgb", "rf", "har_resid_xgb"]:
         q = p[p["model"] == m].set_index("date")
         for sname in ["all"] + SLICES:
             idx = har.index if sname == "all" else \
@@ -80,7 +81,7 @@ def fig_cum_qlike(p: pd.DataFrame, cfg: dict) -> str:
     for per in cfg["periods"].values():
         ax.axvspan(pd.Timestamp(per["start"]), pd.Timestamp(per["end"]),
                    color=MUTED, alpha=0.18, linewidth=0)
-    for m in ["harx", "xgb", "rf"]:
+    for m in ["harx", "xgb", "rf", "har_resid_xgb"]:
         d = (p[p["model"] == m].set_index("date")["ql"] - har).cumsum()
         ax.plot(d.index, d, color=COLOR[m], linewidth=1.6, label=LABEL[m])
     ax.axhline(0, color=INK_2, linewidth=0.8)
@@ -100,7 +101,7 @@ def fig_zoom(p: pd.DataFrame, cfg: dict) -> str:
         a = act.loc[lo:hi]
         ax.plot(a.index, np.sqrt(252 * a) * 100, color=MUTED, linewidth=0.9,
                 label="Actual RV")
-        for m in ["har", "harx", "xgb"]:
+        for m in ["har", "harx", "xgb", "har_resid_xgb"]:
             q = p[p["model"] == m].set_index("date")["y_pred_var"].loc[lo:hi]
             ax.plot(q.index, np.sqrt(252 * q) * 100, color=COLOR[m],
                     linewidth=1.5, label=LABEL[m])
@@ -114,7 +115,7 @@ def fig_zoom(p: pd.DataFrame, cfg: dict) -> str:
         _date_axis(ax)
     h, lab = axes[0].get_legend_handles_labels()
     fig.tight_layout(rect=(0, 0.05, 1, 1))
-    fig.legend(h, lab, frameon=False, fontsize=8, ncol=4, loc="lower center")
+    fig.legend(h, lab, frameon=False, fontsize=8, ncol=5, loc="lower center")
     return _save(fig, "w04_jump_zoom.png")
 
 
@@ -170,6 +171,7 @@ def main() -> None:
     yq = yq.round(3)
     yq["XGB / HAR"] = (yq["xgb"] / yq["har"]).round(3)
     yq["HAR-X / HAR"] = (yq["harx"] / yq["har"]).round(3)
+    yq["HAR+Resid / HAR"] = (yq["har_resid_xgb"] / yq["har"]).round(3)
     yq = yq.rename(columns=LABEL).reset_index()
 
     ss = M.slice_scores(pred, slices).droplevel("target").reset_index()
@@ -194,11 +196,12 @@ def main() -> None:
 
     rk_x, rho_x = rank_table(imp, "xgb")
     rk_r, rho_r = rank_table(imp, "rf")
+    rk_hrx, rho_hrx = rank_table(imp, "har_resid_xgb")
     imp_tbl = imp.groupby(["model", "slice", "feature"])["importance"].mean() \
         .unstack("slice")
     imp_tbl = imp_tbl[[c for c in ["all"] + SLICES if c in imp_tbl]]
     top = {}
-    for m in ["xgb", "rf", "harx"]:
+    for m in ["xgb", "rf", "harx", "har_resid_xgb"]:
         if m in imp_tbl.index.get_level_values(0):
             x = imp_tbl.loc[m].round(4).sort_values("all", ascending=False)
             top[m] = x.reset_index()
@@ -217,6 +220,10 @@ def main() -> None:
         ["fold", "test_year", "max_depth", "min_samples_leaf", "max_features",
          "val_rmse"]].round(4), ["fold", "test_year", "max_depth",
                                  "min_samples_leaf"])
+    hrxp = as_int(params[params["model"] == "har_resid_xgb"][
+        ["fold", "test_year", "max_depth", "learning_rate", "n_estimators",
+         "val_rmse"]].round(4), ["fold", "test_year", "max_depth",
+                                 "n_estimators"])
     hx_cols = ["har_logrv_1d", "har_logrv_5d", "har_logrv_22d", "vix_1d",
                "vxn_1d"]
     hx = coef[coef["param"].isin(hx_cols)]
@@ -228,7 +235,8 @@ def main() -> None:
 
     figs = {"cum": fig_cum_qlike(p, cfg), "zoom": fig_zoom(p, cfg),
             "imp_x": fig_importance(imp, "xgb"),
-            "imp_r": fig_importance(imp, "rf")}
+            "imp_r": fig_importance(imp, "rf"),
+            "imp_hrx": fig_importance(imp, "har_resid_xgb")}
 
     def verdict(m):
         r = dm_all[dm_all["model"] == LABEL[m]].iloc[0]
@@ -247,15 +255,17 @@ def main() -> None:
 產生時間：{pd.Timestamp.now(tz=dl.ET):%Y-%m-%d %H:%M} ET　·　預測存檔：{meta['saved_at'][:16]}
 
 程式：`src/models/trees.py`（XGBoost、隨機森林、調參、permutation importance）、
-`src/models/har.py`（HAR-X）、`src/models/week4.py`（執行）。
+`src/models/har.py`（HAR-X）、`src/models/residual.py`（HAR+殘差修正）、
+`src/models/week4.py`（執行）。
 預測：`data/processed/predictions/week4_models.parquet`；HAR、RW 讀自 `har_baselines.parquet`（未重新訓練）。
 切片定義：`config/evaluation.toml`（在看模型結果前確認）；定義與基準核對見 `week04_definitions.md`。
 
-## 結論：XGBoost 對 HAR（QLIKE，全部樣本外）
+## 結論：模型對 HAR（QLIKE，全部樣本外）
 
 * XGBoost：{verdict('xgb')}
 * 隨機森林：{verdict('rf')}
 * HAR-X：{verdict('harx')}
+* **HAR+殘差XGB**：{verdict('har_resid_xgb')}
 
 分期間與切片的結果見第 3、4 節；解讀見 `week04_review_notes.md`。
 
@@ -264,11 +274,17 @@ def main() -> None:
 * 目標：t 日的 log RV（日內，主結果），特徵來自 `features_prev_close`（t−1 收盤前可知）。
 * **HAR-X**：HAR 三項 + log VIX + log VXN，OLS。
 * **XGBoost / 隨機森林**：{len(meta['tree_features'])} 個特徵：`{', '.join(meta['tree_features'])}`。
+* **HAR+殘差XGB**（`har_resid_xgb`）：先用整個訓練段重新配一次 HAR，再讓 XGBoost 去預測
+  HAR 的殘差（`y − HAR.predict(X)`），XGBoost 的調參、early stopping 都跟一般 XGBoost 一樣，
+  只是目標換成殘差。最終預測 = HAR 預測 + XGBoost 對殘差的預測。動機：樹模型無法外插訓練範圍外
+  的極端值，讓 HAR 負責外插、樹只做局部修正，理論上能同時保住 HAR 在極端事件的表現、又保留樹
+  模型在其他時期抓到的非線性訊號。
 * 調參只在每折訓練段內：訓練段最後一年當驗證段；XGBoost 用 early stopping 決定樹數，
   網格 max_depth × learning_rate；隨機森林網格 max_depth × min_samples_leaf × max_features。
   選定後以整個訓練段重新訓練。測試段不參與。
 * 變異數預測 = exp(預測 + σ²/2)。HAR / HAR-X 的 σ² = 訓練段殘差變異數；樹模型的訓練段內殘差會嚴重低估，
-  改用**驗證段**的殘差均方（仍在訓練段內）。
+  改用**驗證段**的殘差均方（仍在訓練段內）。HAR+殘差XGB 的 σ² 用同一套邏輯，但驗證段殘差已經是
+  「HAR 殘差再被樹修正後」的誤差，等於是整個組合模型的驗證段殘差。
 * 比較樣本：所有模型都有預測的日期（{len(dates)} 天；因特徵缺值少了 {n_drop} 天）。
 
 ## 2. 全部樣本外
@@ -323,6 +339,13 @@ XGBoost（各折排名平均 Spearman 相關 {rho_x:.2f}）：
 
 {_md_table(top['rf'])}
 
+HAR+殘差XGB（各折排名平均 Spearman 相關 {rho_hrx:.2f}；打亂的是進到 XGBoost 殘差修正那一步的特徵，
+不是 HAR 本身的三項）：
+
+![importance har_resid_xgb]({figs['imp_hrx']})
+
+{_md_table(top['har_resid_xgb'])}
+
 HAR-X：
 
 {_md_table(top['harx'])}
@@ -336,6 +359,11 @@ XGBoost：
 隨機森林：
 
 {_md_table(rp)}
+
+HAR+殘差XGB 的 XGBoost 階段（`val_rmse` 是 HAR 殘差尺度的驗證誤差，跟上面 XGBoost 直接預測
+log RV 的 val_rmse 不是同一個目標，不能直接比較數值大小）：
+
+{_md_table(hrxp)}
 
 HAR-X 係數（括號內為 Newey-West 標準誤；VIX、VXN 以 log 進入）：
 
