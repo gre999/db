@@ -23,6 +23,10 @@ py -3.12 -m venv .venv
 :: 4.（第 2 週）VIX_History.csv、VXN_History.csv 放到 data\raw\cboe\ 後建特徵矩陣
 .venv\Scripts\python -m src.features
 .venv\Scripts\python scripts\make_week02_report.py
+
+:: 5.（第 3 週）HAR 與 random walk，walk-forward 預測存到 data\processed\predictions\
+.venv\Scripts\python -m src.models.har
+.venv\Scripts\python scripts\make_week03_report.py
 ```
 
 下游程式讀資料：
