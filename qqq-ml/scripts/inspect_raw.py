@@ -5,7 +5,9 @@ range, bar spacing, and which clock times appear (to spot pre/post-market
 bars and the timezone). Read-only: never writes to data/raw/.
 
 Usage:
-    python scripts/inspect_raw.py [path]   # default: data/raw
+    python scripts/inspect_raw.py [path]            # dir or single file
+    python scripts/inspect_raw.py DIR --combine     # treat all files in DIR
+                                                    # as one table
 """
 from __future__ import annotations
 
@@ -101,7 +103,42 @@ def inspect(path: Path) -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"  !! could not read as table: {exc}")
         return
+    describe(df)
 
+
+def inspect_combined(files: list[Path]) -> None:
+    """Concatenate many same-format files and describe them as one table."""
+    print("=" * 78)
+    print(f"COMBINED: {len(files)} files, "
+          f"{human_size(sum(p.stat().st_size for p in files))}")
+    print(f"FIRST FILE: {files[0].name}   LAST FILE: {files[-1].name}")
+    head, _ = raw_lines(files[0])
+    print("RAW HEAD OF FIRST FILE:")
+    for line in head:
+        print(f"  {line}")
+    frames = []
+    for p in files:
+        try:
+            frames.append(read_table(p))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  !! could not read {p.name}: {exc}")
+    empty = [p.name for p, f in zip(files, frames) if len(f) == 0]
+    if empty:
+        print(f"EMPTY FILES: {len(empty)} e.g. {empty[:3]}")
+    df = pd.concat(frames, ignore_index=True)
+    print(f"ROWS BEFORE DEDUP: {len(df):,}")
+    ts = find_timestamp(df)
+    if ts is not None:
+        order = pd.Series(ts).sort_values(kind="stable").index
+        df = df.loc[order].reset_index(drop=True)
+        dup = pd.Series(ts).loc[order].reset_index(drop=True).duplicated()
+        print(f"DUPLICATE TIMESTAMPS ACROSS FILES: {dup.sum():,} "
+              f"(expected: weekly windows overlap)")
+        df = df[~dup.values].reset_index(drop=True)
+    describe(df)
+
+
+def describe(df: pd.DataFrame) -> None:
     print(f"ROWS: {len(df):,}   COLUMNS: {list(df.columns)}")
     print("DTYPES:")
     print("  " + df.dtypes.to_string().replace("\n", "\n  "))
@@ -158,11 +195,20 @@ def inspect(path: Path) -> None:
 
 
 def main() -> None:
-    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("data/raw")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    combine = "--combine" in sys.argv[1:]
+    root = Path(args[0]) if args else Path("data/raw")
     if not root.exists():
         sys.exit(f"Path not found: {root.resolve()}")
+    if root.is_file():
+        inspect(root)
+        return
     files = sorted(p for p in root.rglob("*") if p.is_file()
                    and not p.name.startswith("."))
+    if combine:
+        inspect_combined([p for p in files
+                          if p.suffix.lower() in TEXT_EXT | PARQUET_EXT])
+        return
     print(f"Found {len(files)} file(s) under {root.resolve()}")
     for p in files:
         print(f"  {human_size(p.stat().st_size):>10}  {p.relative_to(root)}")
