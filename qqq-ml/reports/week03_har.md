@@ -5,6 +5,7 @@
 程式：`src/models/har.py`、`src/models/base.py`、`src/metrics.py`。
 預測：`data/processed/predictions/har_baselines.parquet`（7,748 列）、
 係數：`har_baselines_coefficients.parquet`。
+檢視結論見 [`week03_review_notes.md`](week03_review_notes.md)。
 
 ## 完成標準
 

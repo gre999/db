@@ -93,11 +93,12 @@ def fig_coefs(coef: pd.DataFrame) -> str:
     ax.axhline(0, color=MUTED, linewidth=0.8)
     years = c.drop_duplicates("fold").set_index("fold")["train_end"] \
         .dt.year.add(1)
-    ax.set_xticks(years.index, [f"{f}\n(test {y})" for f, y in years.items()])
+    ax.set_xticks(years.index, [str(y) for y in years.to_numpy()])
+    ax.set_xlabel("Test year of the fold (training = previous 3 years)")
     ax.set_title("HAR coefficients by fold (±1.96 Newey-West s.e.)")
     ax.set_ylabel("Coefficient")
-    ax.legend(frameon=False, fontsize=8, ncol=3, loc="lower right",
-              bbox_to_anchor=(1, 1.0))
+    ax.legend(frameon=False, fontsize=8, ncol=3, loc="upper center",
+              bbox_to_anchor=(0.5, -0.22))
     return _save(fig, "w03_coefficients.png")
 
 
@@ -218,6 +219,7 @@ def main() -> None:
 程式：`src/models/har.py`、`src/models/base.py`、`src/metrics.py`。
 預測：`data/processed/predictions/har_baselines.parquet`（{meta['rows']:,} 列）、
 係數：`har_baselines_coefficients.parquet`。
+檢視結論見 [`week03_review_notes.md`](week03_review_notes.md)。
 
 ## 完成標準
 
