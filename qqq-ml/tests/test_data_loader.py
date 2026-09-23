@@ -89,6 +89,17 @@ def test_exclude_half_days_option(built):
     assert pd.Timestamp(c.HALF_DAY) in d_all.index
 
 
+def test_max_fill_ratio_drops_low_quality_days(built):
+    out = built["out"]
+    bad = pd.Timestamp("2023-11-15")               # 3/390 minutes filled
+    d = dl.load_daily(max_fill_ratio=0.005, processed_dir=out)
+    assert bad not in d.index and pd.Timestamp("2023-11-16") in d.index
+    b5 = dl.load_5min(max_fill_ratio=0.005, processed_dir=out)
+    assert bad not in set(b5["day"])
+    m = dl.load_minute_rth(max_fill_ratio=0.005, processed_dir=out)
+    assert bad not in set(m["day"])
+
+
 def test_holiday_and_partial_day(built):
     d = dl.load_daily(processed_dir=built["out"])
     assert pd.Timestamp(c.HOLIDAY) not in d.index

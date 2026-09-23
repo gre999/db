@@ -119,18 +119,13 @@ def fig_close_check(daily: pd.DataFrame) -> str:
 
 
 def fig_raw_vs_adj(daily: pd.DataFrame) -> str:
+    """Cumulative dividend adjustment: how far raw prices sit above adjusted."""
     d = daily.dropna(subset=["close_adj"])
-    fig, ax = plt.subplots(figsize=(8, 3.6))
-    ax.plot(d.index, d["close"], color=BLUE, linewidth=1.5,
-            label="Raw (minute data, not adjusted)")
-    ax.plot(d.index, d["close_adj"], color=ORANGE, linewidth=1.5,
-            label="Dividend-adjusted (IBKR ADJUSTED_LAST)")
-    ex = d[d["is_ex_div"]]
-    ax.scatter(ex.index, ex["close"], s=10, color=INK_2, zorder=3,
-               label="Ex-dividend date")
-    ax.legend(frameon=False, loc="upper left", fontsize=8)
-    ax.set_title("QQQ close: raw vs dividend-adjusted")
-    ax.set_ylabel("USD")
+    gap = (d["close"] / d["close_adj"] - 1) * 100
+    fig, ax = plt.subplots(figsize=(8, 3.4))
+    ax.step(d.index, gap, where="post", color=BLUE, linewidth=1.5)
+    ax.set_title("Raw vs dividend-adjusted price gap (steps = ex-dividend dates)")
+    ax.set_ylabel("Raw / adjusted - 1 (%)")
     _date_axis(ax)
     return _save(fig, "raw_vs_adjusted.png")
 
@@ -198,6 +193,7 @@ def main() -> None:
 產生時間：{pd.Timestamp.now(tz=dl.ET):%Y-%m-%d %H:%M} ET　·　資料建置：{meta['built_at'][:16]}
 
 資料來源：IBKR TWS API（`scripts/download_ibkr.py`）。清理程式：`src/data_loader.py`。
+人工檢視結論見 [`week01_review_notes.md`](week01_review_notes.md)。
 
 ## 1. 總覽
 

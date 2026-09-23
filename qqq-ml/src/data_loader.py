@@ -567,21 +567,38 @@ def build_all(raw_dir: Path = RAW_DIR, out_dir: Path = PROCESSED_DIR,
 # Loaders for downstream code
 # --------------------------------------------------------------------------
 def _load(name: str, processed_dir: Path, exclude_half_days: bool,
-          index_col: str | None = None) -> pd.DataFrame:
-    path = Path(processed_dir) / OUTPUTS[name]
+          max_fill_ratio: float | None = None) -> pd.DataFrame:
+    """Read one processed file, optionally dropping half / low-quality days.
+
+    ``max_fill_ratio`` drops whole sessions whose share of filled RTH
+    minutes (see ``daily.fill_ratio``) is above the threshold. The filter is
+    decided per day from that day's own data quality, so it does not leak
+    future information into earlier days.
+    """
+    processed_dir = Path(processed_dir)
+    path = processed_dir / OUTPUTS[name]
     if not path.exists():
         raise FileNotFoundError(f"{path} missing - run "
                                 "`python -m src.data_loader` first")
     df = pd.read_parquet(path)
     if exclude_half_days:
         df = df[~df["is_half_day"].astype(bool)]
+    if max_fill_ratio is not None:
+        if name == "daily":
+            df = df[df["fill_ratio"] <= max_fill_ratio]
+        else:
+            fr = pd.read_parquet(processed_dir / OUTPUTS["daily"],
+                                 columns=["fill_ratio"])["fill_ratio"]
+            bad = fr.index[fr > max_fill_ratio]
+            df = df[~df["day"].isin(bad)]
     return df
 
 
 def load_minute_rth(exclude_half_days: bool = False,
+                    max_fill_ratio: float | None = None,
                     processed_dir: Path = PROCESSED_DIR) -> pd.DataFrame:
     """1-min RTH bars on a complete grid (see ``fill_rth_minutes``)."""
-    return _load("rth", processed_dir, exclude_half_days)
+    return _load("rth", processed_dir, exclude_half_days, max_fill_ratio)
 
 
 def load_extended(processed_dir: Path = PROCESSED_DIR) -> pd.DataFrame:
@@ -590,15 +607,17 @@ def load_extended(processed_dir: Path = PROCESSED_DIR) -> pd.DataFrame:
 
 
 def load_5min(exclude_half_days: bool = False,
+              max_fill_ratio: float | None = None,
               processed_dir: Path = PROCESSED_DIR) -> pd.DataFrame:
     """5-min RTH bars (``ts`` = bar start, ``bar_end`` = when known)."""
-    return _load("bars5", processed_dir, exclude_half_days)
+    return _load("bars5", processed_dir, exclude_half_days, max_fill_ratio)
 
 
 def load_daily(exclude_half_days: bool = False,
+               max_fill_ratio: float | None = None,
                processed_dir: Path = PROCESSED_DIR) -> pd.DataFrame:
     """Daily RTH bars from minutes plus quality, IBKR and dividend columns."""
-    return _load("daily", processed_dir, exclude_half_days)
+    return _load("daily", processed_dir, exclude_half_days, max_fill_ratio)
 
 
 def load_anomalies(processed_dir: Path = PROCESSED_DIR) -> pd.DataFrame:
