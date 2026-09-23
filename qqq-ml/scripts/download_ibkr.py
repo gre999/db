@@ -84,51 +84,102 @@ def download_daily(ib, contract) -> None:
               f"{df['date'].iloc[0]} -> {df['date'].iloc[-1]}  -> {path}")
 
 
-def download_minute(ib, contract, start: date, pause: float) -> None:
+class LinkMonitor:
+    """Track whether TWS is connected to IBKR's servers.
+
+    TWS reports error 1100 when it loses its link to IBKR, and 1101/1102
+    when the link is restored. While the link is down every historical
+    request just times out, so we wait instead of burning requests.
+    """
+
+    def __init__(self, ib):
+        self.ib = ib
+        self.link_up = True
+        ib.errorEvent += self._on_error
+
+    def _on_error(self, req_id, code, msg, *args):
+        if code == 1100:
+            self.link_up = False
+        elif code in (1101, 1102):
+            self.link_up = True
+
+    def wait(self, pause: float) -> None:
+        """Block until the socket to TWS and TWS's link to IBKR are up."""
+        announced = False
+        while not self.ib.isConnected() or not self.link_up:
+            if not self.ib.isConnected():
+                raise SystemExit("Lost connection to TWS itself. Restart TWS "
+                                 "and re-run; finished weeks are kept.")
+            if not announced:
+                print("  ... TWS lost its link to IBKR, waiting to reconnect")
+                announced = True
+            self.ib.sleep(pause)
+        if announced:
+            print("  ... link restored")
+
+
+def download_minute(ib, contract, start: date, pause: float,
+                    head: datetime | None = None) -> None:
+    """Download 1-min bars week by week, newest first; resumable.
+
+    An empty reply is ambiguous: it can mean "no data that week" or a
+    timeout (e.g. TWS lost its connection to IBKR, error 1100). Empty weeks
+    are therefore retried with back-off and never written to disk, so a
+    later re-run picks them up again. Weeks that end before IBKR's earliest
+    available bar (``head``) are skipped instead of requested.
+    """
     out = OUT_DIR / "minute"
     out.mkdir(parents=True, exist_ok=True)
     today = datetime.now(ET).date()
+    if head is not None:
+        start = max(start, head.astimezone(ET).date())
     ends = week_ends(start, today)
     print(f"[minute] {len(ends)} weekly windows from {start} to {today}")
-    empty_streak = 0
+    failed = []
+    link = LinkMonitor(ib)
     for i, end in enumerate(ends, 1):
         path = out / f"{SYMBOL}_1min_TRADES_{end:%Y-%m-%d}.csv"
         is_current_week = end.date() > today
         if path.exists() and not is_current_week:
             continue
-        for attempt in range(3):
+        df = None
+        for attempt in range(4):
+            link.wait(pause)
             try:
                 bars = ib.reqHistoricalData(
                     contract, endDateTime=end, durationStr="8 D",
                     barSizeSetting="1 min", whatToShow="TRADES",
                     useRTH=False, formatDate=2, timeout=120,
                 )
-                break
+                df = bars_to_df(bars)
             except Exception as exc:  # noqa: BLE001
                 print(f"  ! {end:%Y-%m-%d} attempt {attempt + 1}: {exc}")
-                time.sleep(pause * 5 * (attempt + 1))
-        else:
-            print(f"  ! giving up on week ending {end:%Y-%m-%d}")
-            continue
-
-        df = bars_to_df(bars)
-        if df is None:
-            empty_streak += 1
-            print(f"[minute] {i}/{len(ends)} week ending {end:%Y-%m-%d}: empty")
-            if empty_streak >= 4:
-                print("[minute] 4 empty weeks in a row: either the start of "
-                      "available history, or no market data permission "
-                      "(look for IBKR error 162/354 above). Stopping.")
+            if df is not None:
                 break
+            backoff = pause * 10 * (attempt + 1)
+            print(f"  ! week ending {end:%Y-%m-%d} empty/timeout "
+                  f"(attempt {attempt + 1}/4), retrying in {backoff:.0f}s")
+            ib.sleep(backoff)
+
+        if df is None:
+            failed.append(end.date())
+            print(f"[minute] {i}/{len(ends)} week ending {end:%Y-%m-%d}: "
+                  f"FAILED, not saved (re-run later)")
         else:
-            empty_streak = 0
             # formatDate=2 -> tz-aware UTC datetimes; store as ISO UTC.
             df["date"] = df["date"].map(lambda t: t.astimezone(timezone.utc)
                                         .isoformat())
             df.to_csv(path, index=False)
             print(f"[minute] {i}/{len(ends)} week ending {end:%Y-%m-%d}: "
                   f"{len(df):,} bars")
-        time.sleep(pause)
+        ib.sleep(pause)
+
+    if failed:
+        print(f"[minute] {len(failed)} week(s) not downloaded: "
+              f"{', '.join(map(str, failed))}")
+        print("[minute] Run the same command again to retry them.")
+    else:
+        print("[minute] all weeks downloaded.")
 
 
 def main() -> None:
@@ -180,7 +231,8 @@ def main() -> None:
             download_daily(ib, contract)
         if not args.daily_only:
             download_minute(ib, contract, date.fromisoformat(args.start),
-                            args.pause)
+                            args.pause,
+                            head if isinstance(head, datetime) else None)
     finally:
         ib.disconnect()
     print("Done.")
