@@ -336,12 +336,35 @@ class FeatureContext:
             "rkurt": n * g["r4"].sum(min_count=1) / rv ** 2,
         })
 
-    def vol_index_prev(self, name: str) -> pd.Series:
+    @cached_property
+    def jump_stats(self) -> pd.DataFrame:
+        """Per-session jump measures from 5-min returns.
+
+        * ``max_abs_r``: largest |5-min log return| of the session.
+        * ``bv``: bipower variation (pi/2)·N/(N-1)·Σ|r_i||r_{i-1}|, a
+          jump-robust estimate of the continuous part of RV
+          (Barndorff-Nielsen & Shephard 2004).
+        * ``jump``: max(RV - BV, 0), the jump component.
+        """
+        r = self._returns.sort_values("ts")
+        a = r["r"].abs()
+        prod = a * a.groupby(r["day"]).shift(1)
+        g = r.assign(a=a, prod=prod, r2=r["r"] ** 2).groupby("day")
+        n = g["r"].count()
+        rv = g["r2"].sum(min_count=1)
+        bv = (np.pi / 2) * (n / (n - 1)) * g["prod"].sum(min_count=1)
+        return pd.DataFrame({"max_abs_r": g["a"].max(), "bv": bv,
+                             "jump": (rv - bv).clip(lower=0)})
+
+    def vol_index_prev(self, name: str, diff: bool = False) -> pd.Series:
+        """Last Cboe close before t (or its change vs the Cboe date before)."""
         vi = self.data.vol_index
         if vi is None or name not in vi:
             raise KeyError(f"vol index {name!r} not loaded")
-        a = dl.align_prev_close(vi[name], self.cal,
-                                self.cfg.vix_max_stale_days)
+        s = vi[name].dropna()
+        if diff:
+            s = s.diff()
+        a = dl.align_prev_close(s, self.cal, self.cfg.vix_max_stale_days)
         return a["value"]
 
 
@@ -457,6 +480,26 @@ def _vix(ctx):
           needs=("vxn",))
 def _vxn(ctx):
     return ctx.vol_index_prev("vxn")
+
+
+# --- jump features (week 4) -----------------------------------------------
+@register("max_abs_ret5_1d", "prev_close",
+          "largest |5-min log return| of session t-1")
+def _max_abs_r(ctx):
+    return ctx.lag(ctx.jump_stats["max_abs_r"].where(ctx.valid))
+
+
+@register("jump_rv_bv_1d", "prev_close",
+          "jump component of t-1: max(RV - BV, 0), BV = bipower variation")
+def _jump(ctx):
+    return ctx.lag(ctx.jump_stats["jump"].where(ctx.valid))
+
+
+@register("vix_chg_1d", "prev_close",
+          "VIX change: last Cboe close before t minus the Cboe close before "
+          "that", needs=("vix",))
+def _vix_chg(ctx):
+    return ctx.vol_index_prev("vix", diff=True)
 
 
 # --------------------------------------------------------------------------

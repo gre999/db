@@ -210,3 +210,27 @@ def test_from_processed_pipeline(built, tmp_path):
     assert "vix_1d" in X and "overnight_gap" in X
     ex = pd.Timestamp("2023-11-20")                   # planted dividend
     assert md.dividends.loc[ex] == pytest.approx(0.60, abs=0.01)
+
+
+# ------------------------------------------------------------- jump features
+def test_jump_features(data, full):
+    X = full["prev_close"]
+    ctx = F.FeatureContext(data)
+    i = 200
+    d, p = data.calendar[i], data.calendar[i - 1]
+    b = data.bars5[data.bars5["day"] == p].sort_values("ts")
+    px = np.r_[b["open"].iloc[0], b["close"].to_numpy()]
+    r = np.diff(np.log(px))
+    n = len(r)
+    bv = np.pi / 2 * n / (n - 1) * np.sum(np.abs(r[1:]) * np.abs(r[:-1]))
+    rv = np.sum(r ** 2)
+    assert X.loc[d, "max_abs_ret5_1d"] == pytest.approx(np.abs(r).max())
+    assert X.loc[d, "jump_rv_bv_1d"] == pytest.approx(max(rv - bv, 0.0))
+    assert (X["jump_rv_bv_1d"].dropna() >= 0).all()
+    vi = data.vol_index["vix"]
+    src = vi.index[vi.index < d]
+    assert X.loc[d, "vix_chg_1d"] == pytest.approx(
+        vi.loc[src[-1]] - vi.loc[src[-2]])
+    # BV is jump-robust: on no-jump synthetic data it tracks RV closely.
+    js = ctx.jump_stats
+    assert (js["bv"] / (js["jump"] + js["bv"])).median() > 0.8

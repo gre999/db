@@ -27,6 +27,12 @@ py -3.12 -m venv .venv
 :: 5.（第 3 週）HAR 與 random walk，walk-forward 預測存到 data\processed\predictions\
 .venv\Scripts\python -m src.models.har
 .venv\Scripts\python scripts\make_week03_report.py
+
+:: 6.（第 4 週）評估切片在 config\evaluation.toml；HAR-X、XGBoost、隨機森林
+.venv\Scripts\python -m src.features
+.venv\Scripts\python scripts\check_week04_setup.py
+.venv\Scripts\python -m src.models.week4
+.venv\Scripts\python scripts\make_week04_report.py
 ```
 
 下游程式讀資料：

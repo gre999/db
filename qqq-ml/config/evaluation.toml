@@ -9,21 +9,24 @@
 [periods.covid_2020]
 label = "2020 COVID crash"
 start = "2020-02-24"   # first large sell-off session after the Feb 21 close
-end   = "2020-04-30"   # through the April rebound; RV still elevated
+end   = "2020-05-29"   # through the April rebound and the May decay
 reason = """Volatility jumps from calm (Feb 21) to the March 16 peak with four \
-market-wide circuit breakers (Mar 9/12/16/18), then decays through April."""
+market-wide circuit breakers (Mar 9/12/16/18), then decays through April-May. \
+End extended from 04-30 to 05-29 (decision 2026-09-23) to cover the full decay."""
 
 [periods.tariff_2025]
 label = "2025 tariff shock"
-start = "2025-04-03"   # first session after the Apr 2 (after-close) tariff announcement
+start = "2025-02-20"   # start of the Feb-Mar correction that preceded the shock
 end   = "2025-05-09"   # through the 90-day pause (Apr 9) and until the May 12 US-China de-escalation
-reason = """Sudden jump on Apr 3-4, extreme days Apr 7-9 (pause announced Apr 9 13:18 ET), \
-then decay through early May."""
+reason = """Feb 20 - Mar correction (tariff headlines, growth scare), then the sudden jump \
+after the Apr 2 (after-close) announcement: Apr 3-4, extreme days Apr 7-9 (pause announced \
+Apr 9 13:18 ET), decay through early May. Start moved from 04-03 to 02-20 \
+(decision 2026-09-23) to include the run-up."""
 
 [jump_days]
 # Auxiliary, rule-based slice (ex post; uses the label day's own RV, so it is
 # an evaluation filter only, never a feature):
 #   jump day  <=>  RV(t) > multiple * mean(RV over sessions t-22 .. t-1)
 # RV is the intraday RV of the target being evaluated.
-multiple = 2.0
+multiple = 2.0        # confirmed 2026-09-23
 window = 22

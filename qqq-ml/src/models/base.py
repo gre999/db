@@ -117,11 +117,16 @@ def load_dataset(target: str = "rv", processed_dir: Path = dl.PROCESSED_DIR
 # --------------------------------------------------------------------------
 def run_walk_forward(models: dict[str, Forecaster], X: pd.DataFrame,
                      y_log: pd.Series, splitter: WalkForwardSplit,
-                     target: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+                     target: str, on_fit=None
+                     ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Fit every model on each fold's training slice, predict its test slice.
 
     All models share one sample: the dates where every model's features and
     the label are present, so their errors are directly comparable.
+
+    ``on_fit(fold, name, model, X_test, y_test)`` is called after each fit
+    (e.g. to record tuned parameters or test-slice permutation importance);
+    it must not refit the model.
 
     Returns:
         (predictions, coefficients). Coefficients are long format:
@@ -138,6 +143,8 @@ def run_walk_forward(models: dict[str, Forecaster], X: pd.DataFrame,
         for name, proto in models.items():
             m = clone(proto).fit(Xtr, ytr)
             p_log = m.predict(Xte)
+            if on_fit is not None:
+                on_fit(f, name, m, Xte, yte)
             preds.append(pd.DataFrame({
                 "date": Xte.index, "fold": f.number, "model": name,
                 "target": target,

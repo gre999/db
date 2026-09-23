@@ -70,7 +70,8 @@ def make_vol_index(seed: int = 2) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     dates = calendar().union([CBOE_ONLY]).difference(VIX_GAP)
     vix = 15 + np.cumsum(rng.normal(0, 0.5, len(dates))).clip(-5, 40)
-    return pd.DataFrame({"vix": vix, "vxn": vix * 1.2}, index=dates)
+    vxn = vix * 1.2 * np.exp(rng.normal(0, 0.05, len(dates)))
+    return pd.DataFrame({"vix": vix, "vxn": vxn}, index=dates)
 
 
 def make_market_data() -> MarketData:

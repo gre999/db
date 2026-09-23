@@ -66,11 +66,22 @@ class HARModel(Forecaster):
         regressors: regressor columns (default: 1/5/22-session log RV).
         nw_lags: Newey-West lags for the standard errors (only affects
             ``coef_table``, not the forecasts).
+        log_cols: regressors entered as ``log(x)`` (e.g. VIX levels in
+            HAR-X, so every term is on a log-variance-like scale).
     """
 
-    def __init__(self, regressors: list[str] | None = None, nw_lags: int = 5):
+    def __init__(self, regressors: list[str] | None = None, nw_lags: int = 5,
+                 log_cols: list[str] | None = None):
         self.regressors = regressors
         self.nw_lags = nw_lags
+        self.log_cols = log_cols
+
+    def _X(self, X):
+        Z = super()._X(X).copy()
+        for c in self.log_cols or []:
+            j = self.features.index(c)
+            Z[:, j] = np.log(Z[:, j])
+        return Z
 
     @property
     def features(self) -> list[str]:
@@ -103,6 +114,14 @@ class HARModel(Forecaster):
 
 def baseline_models() -> dict[str, Forecaster]:
     return {"rw": RandomWalk(), "har": HARModel()}
+
+
+VOL_INDEX = ["vix_1d", "vxn_1d"]
+
+
+def harx_model() -> HARModel:
+    """HAR-X: HAR + log VIX + log VXN (previous Cboe close), OLS."""
+    return HARModel(regressors=HAR_LOG + VOL_INDEX, log_cols=VOL_INDEX)
 
 
 def run(splitter: WalkForwardSplit = WalkForwardSplit(),

@@ -102,9 +102,9 @@ def test_eval_config_and_slices():
     rv[pd.Timestamp("2020-03-16")] = 5.0          # 5x the trailing mean
     rv[pd.Timestamp("2020-03-17")] = 2.1          # trailing mean now > 1.05
     sl = M.eval_slices(days, rv, cfg)
-    assert sl.loc["2020-02-24", "covid_2020"] and sl.loc["2020-04-30", "covid_2020"]
+    assert sl.loc["2020-02-24", "covid_2020"] and sl.loc["2020-05-29", "covid_2020"]
     assert not sl.loc["2020-02-21", "covid_2020"]
-    assert not sl.loc["2020-05-01", "covid_2020"]
+    assert not sl.loc["2020-06-01", "covid_2020"]
     assert sl["jump_day"].sum() == 1 and sl.loc["2020-03-16", "jump_day"]
     assert not sl["tariff_2025"].any()
     # First `window` sessions have no trailing mean -> never a jump day.
