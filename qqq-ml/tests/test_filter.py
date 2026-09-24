@@ -120,6 +120,26 @@ def test_retention_grid_always_offers_no_filter_option():
 
 
 # --------------------------------------------------------------- AUC / calibration
+def test_coefficient_table_matches_fit_filter_folds_and_finds_planted_signal(data):
+    X, orb = data
+    preds = FL.fit_filter_folds(X, orb)
+    coefs = FL.coefficient_table(X, orb)
+
+    assert set(coefs["fold"]) == set(preds["fold"])
+    assert set(OPEN_FEATURE_COLUMNS) <= set(coefs.columns)
+    assert (coefs["retention_selected"].to_numpy()
+           == preds.groupby("fold")["retention_selected"].first().to_numpy()).all()
+
+    # the one genuinely predictive column should stand out and have a
+    # consistent sign across folds (it's the only column driving the label
+    # in the synthetic fixture)
+    signal_col = coefs["open5m_body_ratio"]
+    other_cols = [c for c in OPEN_FEATURE_COLUMNS if c != "open5m_body_ratio"]
+    assert (signal_col.abs().median() >
+           coefs[other_cols].abs().to_numpy().mean() * 2)
+    assert (signal_col > 0).all() or (signal_col < 0).all()
+
+
 def test_auc_and_calibration_detect_the_planted_signal(data):
     X, orb = data
     preds = FL.fit_filter_folds(X, orb)

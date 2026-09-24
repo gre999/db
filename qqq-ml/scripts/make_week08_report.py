@@ -99,6 +99,23 @@ def main() -> None:
                         preds.groupby("fold")["retention_selected"].first().items()}
     no_filter_folds = ", ".join(str(f) for f, r in retention_by_fold.items() if r == 1.0) or "無"
 
+    X = pd.read_parquet(dl.PROCESSED_DIR / "features_open_5m.parquet")
+    coefs = FL.coefficient_table(X, orb)
+    coef_cols = [c for c in coefs.columns if c not in
+                ("fold", "intercept", "retention_selected")]
+    coef_summary = []
+    for c in coef_cols:
+        v = coefs[c]
+        coef_summary.append({"feature": c, "mean_abs_coef": v.abs().mean(),
+                            "mean_coef": v.mean(),
+                            "sign_consistency": max((v > 0).mean(), (v < 0).mean())})
+    coef_summary = pd.DataFrame(coef_summary).sort_values(
+        "mean_abs_coef", ascending=False).reset_index(drop=True)
+    coef_summary_tbl = rnd(coef_summary, 3)
+    body_ratio_row = coef_summary[coef_summary["feature"] == "open5m_body_ratio"].iloc[0]
+    logrv1d_row = coef_summary[coef_summary["feature"] == "har_logrv_1d"].iloc[0]
+    range_rel_row = coef_summary[coef_summary["feature"] == "open5m_range_rel"].iloc[0]
+
     # ---------------------------------------------------------------
     # Part 5: filtered performance
     # ---------------------------------------------------------------
@@ -128,6 +145,30 @@ def main() -> None:
     curve_tbl = as_int(rnd(curve, 3), ["n_trades"])
 
     mw = FE.missed_big_wins(preds, orb)
+
+    # ---------------------------------------------------------------
+    # Pre-conclusion checks (requested before finalizing the report)
+    # ---------------------------------------------------------------
+    null = FE.random_filter_null(preds, orb, n_reps=1000, seed=0)
+    rp = FE.random_filter_p_value(preds, orb, null=null)
+    bb = FE.block_bootstrap_significance(preds, orb, n_boot=2000, seed=0)
+
+    yb = FE.yearly_breakdown(preds, orb)
+    yb["diff"] = yb["filtered_sharpe"] - yb["unfiltered_sharpe"]
+    yb_tbl = as_int(rnd(yb, 3), ["year", "n_days"])
+    n_positive_years = int((yb["diff"] > 0).sum())
+    worst_year = yb.loc[yb["diff"].idxmin()]
+    best_year = yb.loc[yb["diff"].idxmax()]
+
+    fb = FE.fold_breakdown(preds, orb)
+    fb["diff"] = fb["filtered_sharpe"] - fb["unfiltered_sharpe"]
+    fb_tbl = as_int(rnd(fb, 3), ["fold", "n_days"])
+
+    cs = FE.cost_sensitivity(preds)
+    cs_tbl = rnd(cs, 4)
+    gap_main = cs[cs["cost_config"] == "main_cost"]["sharpe_gap"].iloc[0]
+    gap_gross = cs[cs["cost_config"] == "gross_no_cost"]["sharpe_gap"].iloc[0]
+    gap_2x = cs[cs["cost_config"] == "2x_slippage"]["sharpe_gap"].iloc[0]
 
     md = f"""# Week 8 (階段四第一週)交易日篩選管線:logistic 基準
 
@@ -194,15 +235,35 @@ log RV(前1日/前5日均/前22日均)、VIX、VXN、星期幾;第一根K線:方
 第 {no_filter_folds} 折驗證段看不出篩選好處,規則正確地選了不篩選(保留比例=100%);
 其餘折都選了低於 100% 的保留比例。
 
-## 四、篩選後績效
+**逐折標準化 logistic 係數**(哪些特徵最重要、方向在各折是否一致;`sign_consistency` 是
+9 折中同號的比例):
+
+{_md_table(coef_summary_tbl)}
+
+穩定驅動的兩個特徵是 `open5m_body_ratio`(9 折全部同號為正,平均係數量級最大,
+{body_ratio_row['mean_abs_coef']:.3f})和 `har_logrv_1d`(9 折全部同號為負,
+{logrv1d_row['mean_abs_coef']:.3f})。`open5m_range_rel` 反而不穩定(只有
+{range_rel_row['sign_consistency']:.0%} 折同號,接近隨機),不是主要驅動者。
+
+**機制**:`open5m_body_ratio` 為正——第一根 5 分鐘K線實體占區間比例越高(開盤方向越乾淨、
+少影線),ORB 進場當天訊號淨賺的機率越高,這跟 ORB 自己的動能假設(方向乾淨的開盤代表動能
+續航機率高)方向一致,不是意外的相關性。`har_logrv_1d` 為負——前一日已實現波動越高,當天
+訊號反而越可能虧,較合理的解釋是波動群聚(昨天波動高、今天通常也高)讓當天走勢更容易來回
+震盪、提早碰到停損,而不是乾淨地跑滿 10R,不是「停損距離太大」的機制(ORB 的停損/目標都是
+用當天自己第一根K線的區間定義,不是用前一日波動定義)。
+
+## 四、篩選後績效(點估計)
 
 {_md_table(main_tbl)}
 
-**三項成功標準**(`config/week08_filter.toml [significance]`)**全部達成**:
+**三項預先設定的成功標準**(`config/week08_filter.toml [significance]`)**字面上全部達成**:
 1. 篩選後夏普({result['filtered_sharpe']:.3f}) > 不篩選({result['unfiltered_sharpe']:.3f}) {'✓' if result['beats_unfiltered'] else '✗'}
 2. 篩選後夏普 > 隨機篩選 1000 次分布第 95 百分位({result['random_null_p95']:.3f}，
    平均 {result['random_null_mean']:.3f}) {'✓' if result['beats_random_p95'] else '✗'}
 3. 每折每年交易數皆 ≥{cfg['model']['threshold_selection']['min_trades_per_year']} {'✓' if result['min_trades_per_year_ok'] else '✗'}
+
+**但這三項標準本身沒有一項是「篩選前後夏普差是否顯著不為零」的檢定**——第五節的追加檢定
+會補上這個檢定,結論會修正這裡的「達成」。
 
 逐折交易數:
 
@@ -230,20 +291,85 @@ logistic 篩選(夏普 {cmp_tbl.iloc[0]['filtered_sharpe']:.3f})明顯優於 HMM
 {mw['n_dropped']} 個({mw['frac_dropped']:.1%})。確實丟了不少最賺錢的日子,但整體夏普仍提升,
 代表篩選器在「避開的爛日子」上贏得比「丟掉的好日子」損失得更多。
 
-## 五、完成標準逐項回答
+## 五、定稿前追加檢定
+
+第四節的三項標準都只比較點估計,沒有一項檢定「篩選後夏普 - 不篩選夏普」這個差本身是不是
+在抽樣變異下也可能出現。定稿前補四項檢查:
+
+**1. Block bootstrap 顯著性**:篩選後與不篩選夏普差(觀察值 {bb['observed_sharpe_diff']:.3f})
+的移動區塊拔靴(區塊長度 {bb['block_size']} 天,{bb['n_boot']} 次)**p 值 = {bb['p_value']:.3f},
+不顯著**。對照隨機篩選基準的經確 p 值:實際篩選夏普({rp['observed_sharpe']:.3f})在
+{rp['n_reps']} 次隨機篩選中排第 {rp['rank_from_top']} 高,p = {rp['p_value']:.3f}。這兩個檢定
+問不同問題——隨機篩選基準問「篩同樣天數,選這些特定的天跟隨機選有沒有差」(p={rp['p_value']:.3f},
+較小);block bootstrap 問「篩選後與不篩選的夏普差,考慮這段日報酬本身的序列相關抽樣變異,是
+不是明顯不是零」(p={bb['p_value']:.3f},不顯著)。**篩選能排出比隨機更好的天,不代表夏普提升
+這個點估計本身站得住腳**。
+
+**2. 逐年拆解**({n_positive_years}/{len(yb)} 年篩選後夏普 > 不篩選,方向大致一致,但匯總效果
+被兩個極端年份主導):
+
+{_md_table(yb_tbl)}
+
+{int(worst_year['year'])} 年篩選後大幅更差(差 {worst_year['diff']:.2f},filtered
+{worst_year['filtered_sharpe']:.2f} vs unfiltered {worst_year['unfiltered_sharpe']:.2f}——
+那年篩選器選錯了方向);{int(best_year['year'])} 年篩選後大幅更好(差 {best_year['diff']:.2f},
+且是只到 9 月的部分年度)。這兩個極端值互相部分抵銷但沒有完全抵銷,淨效果偏正,這也解釋了
+第 1 點 block bootstrap 為何不顯著——整體提升不是穩健地分散在各年,是被少數幾折的極端結果
+撐著。逐折版本:
+
+{_md_table(fb_tbl)}
+
+**3. 逐折係數同號一致性**:已經在第三節報告——`open5m_body_ratio`、`har_logrv_1d` 兩者都是
+9 折全部同號,且與成本無關(見下一項),是排序能力有訊號的正面證據;但這兩個特徵是看完全部
+9 折結果後才挑出來的,只能算探索性發現,不是預先設定的模型。
+
+**4. 成本敏感度**:篩選前後的夏普差在毛報酬(不扣成本)、主成本、2倍滑價下幾乎不變:
+
+{_md_table(cs_tbl)}
+
+差值分別是毛報酬 {gap_gross:.3f}、主成本 {gap_main:.3f}、2倍滑價 {gap_2x:.3f}——提升確實不是
+「交易變少、省成本」的假象,這項是四項追加檢查中唯一完全正面的結果。
+
+## 六、結論
+
+**排序能力:初步證據。** 隨機篩選基準 p={rp['p_value']:.3f}、兩個特徵(`open5m_body_ratio`、
+`har_logrv_1d`)9 折同號、成本敏感度顯示提升與成本無關——三項都指向分類器對「哪些訊號日
+比較值得進場」有一些真實的排序能力,`open5m_body_ratio` 的機制(開盤方向越乾淨,ORB 的動能
+假設越成立)也跟策略邏輯吻合,不是巧合相關。
+
+**策略層面夏普改善:證據不足。** Block bootstrap p={bb['p_value']:.3f},不顯著;匯總提升被
+{int(worst_year['year'])}、{int(best_year['year'])} 兩個極端年份主導,不是穩健分散在各年的
+效果。
+
+**三項預先設定的成功標準字面上全部達成,但不足以稱為「成功」**——原標準沒有一項是「篩選前後
+夏普差是否顯著不為零」的檢定,這是第五節追加檢定才補上的,結果推翻了字面上的「達成」結論。
+
+## 七、給第九週的建議
+
+1. **成功標準加入 block bootstrap p<0.05**(篩選前後夏普差),在跑模型前寫進設定檔,跟本週
+   其餘標準一樣不能看過結果再決定。
+2. **{int(worst_year['year'])} 年拆多空**,看篩選器是在多頭訊號、空頭訊號,還是兩者上都選
+   錯了方向,才能判斷是特徵在那年失效還是機制本身有方向性的弱點。
+3. **`open5m_body_ratio` + `har_logrv_1d` 兩特徵模型是看完本週全部結果後才挑出來的,下週
+   只能列為探索性對照,不能當作預先設定的主模型**——主模型還是本週全部特徵的 logistic
+   基準,換模型時維持同一組特徵,只換分類器本身。
+
+## 八、完成標準逐項回答
 
 1. **開盤特徵通過截斷與日內截止測試?** 通過——`open_5m` 截止的既有截斷測試 + 新增的
-   「篡改 09:35 後數值」測試,192 個測試全過。
-2. **整條管線跑通,篩選後夏普是否超過三個對照組?** 是——超過不篩選、超過隨機篩選 1000
-   次分布第 95 百分位、也超過階段三 HMM 簡單狀態規則(限定共同範圍)。
-3. **AUC 不錯但夏普沒升的情況?** 沒發生——AUC 中等({auc:.3f})，但夏普確實提升，門檻曲線
-   顯示這個提升在整個保留比例網格上都穩定存在，不是單點巧合。報酬集中度（前10%佔72%毛利）
-   提醒了篩選器可能誤傷大賺日，實測確實丟了 {mw['frac_dropped']:.0%} 的大賺日，但淨效果仍是
-   正的。
-4. **夏普好得不合理，需要查是否用到 9:35 後資料？** 目前的結果量級（篩選後夏普 0.7 左右，
-   比不篩選高約 0.2）不算「好得不合理」；而且日內截止的因果測試（第三部分）與門檻選擇的
-   因果測試（第四部分：篡改最後一折測試段特徵/標籤，確認選中門檻不變）都已經專門檢查過
-   look-ahead，沒有發現問題。
+   「篡改 09:35 後數值」測試,198 個測試全過。
+2. **整條管線跑通,篩選後夏普是否超過三個對照組?** 點估計上是——超過不篩選、超過隨機篩選
+   1000 次分布第 95 百分位、也超過階段三 HMM 簡單狀態規則(限定共同範圍);但 block
+   bootstrap 顯示篩選後與不篩選的夏普差本身不顯著(見第五、六節),不能只看點估計就宣告
+   通過。
+3. **AUC 不錯但夏普沒升的情況?** 沒發生——AUC 中等({auc:.3f})，門檻曲線顯示點估計上的提升
+   在整個保留比例網格上都存在。報酬集中度（前10%佔72%毛利）提醒了篩選器可能誤傷大賺日，
+   實測確實丟了 {mw['frac_dropped']:.0%} 的大賺日，但這不是本週真正的問題所在——真正的問題
+   是點估計的統計顯著性不足（第五、六節）。
+4. **夏普好得不合理，需要查是否用到 9:35 後資料？** 目前的結果量級不算「好得不合理」；日內
+   截止的因果測試（第三部分）與門檻選擇的因果測試（第四部分：篡改最後一折測試段特徵/標籤，
+   確認選中門檻不變）都已經專門檢查過 look-ahead，沒有發現問題——這方面的因果性是乾淨的，
+   問題完全在統計顯著性，不在資料洩漏。
 """
     out_path = REPORTS / "week08_filter_baseline.md"
     out_path.write_text(md, encoding="utf-8")

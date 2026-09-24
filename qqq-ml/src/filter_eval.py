@@ -21,8 +21,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src import backtest as BT
 from src import data_loader as dl
 from src import regime_eval as E
+from src import rules as R
 from src.models import filter as FL
 from src.models import regimes as G
 
@@ -179,6 +181,107 @@ def missed_big_wins(preds: pd.DataFrame, orb: pd.DataFrame,
            "n_dropped": len(dropped),
            "frac_dropped": len(dropped) / len(covered) if len(covered) else np.nan,
            "dropped_dates": list(dropped)}
+
+
+# --------------------------------------------------------------------------
+# Pre-conclusion checks (requested before the report's finding is finalized)
+# --------------------------------------------------------------------------
+def block_bootstrap_significance(preds: pd.DataFrame, orb: pd.DataFrame,
+                                 block_size: int = 20, n_boot: int = 2000,
+                                 seed: int = 0) -> dict:
+    """Moving-block-bootstrap p-value for filtered Sharpe - unfiltered
+    Sharpe != 0 (``src.backtest.block_bootstrap_sharpe_diff``, reused as-is
+    - both series already share an index and serial dependence structure,
+    exactly what that function assumes)."""
+    series = logistic_filter_series(preds, orb)
+    obs, p = BT.block_bootstrap_sharpe_diff(
+        series["filtered"] / 1e4, series["unfiltered"] / 1e4,
+        block_size=block_size, n_boot=n_boot, seed=seed)
+    return {"observed_sharpe_diff": obs, "p_value": p, "block_size": block_size,
+           "n_boot": n_boot}
+
+
+def random_filter_p_value(preds: pd.DataFrame, orb: pd.DataFrame,
+                          null: np.ndarray | None = None,
+                          n_reps: int = 1000, seed: int = 0) -> dict:
+    """Exact rank of the actually-observed filtered Sharpe inside the
+    random-filter null (config [significance.random_filter_null]) - the
+    single number ``beats_random_p95`` in :func:`evaluate_success`
+    summarizes as a threshold check."""
+    if null is None:
+        null = random_filter_null(preds, orb, n_reps=n_reps, seed=seed)
+    observed = E._daily_eval(logistic_filter_series(preds, orb)["filtered"])["sharpe"]
+    n_at_or_above = int(np.sum(null >= observed))
+    return {"observed_sharpe": observed, "n_reps": len(null),
+           "rank_from_top": n_at_or_above + 1,
+           "p_value": n_at_or_above / len(null)}
+
+
+def yearly_breakdown(preds: pd.DataFrame, orb: pd.DataFrame) -> pd.DataFrame:
+    """Filtered vs unfiltered Sharpe by calendar year - checks the overall
+    improvement isn't concentrated in one or two years."""
+    series = logistic_filter_series(preds, orb)
+    rows = []
+    for y, idx in series["unfiltered"].groupby(series["unfiltered"].index.year).groups.items():
+        f_ev = E._daily_eval(series["filtered"].loc[idx])
+        u_ev = E._daily_eval(series["unfiltered"].loc[idx])
+        rows.append({"year": y, "n_days": len(idx),
+                    "filtered_sharpe": f_ev["sharpe"], "unfiltered_sharpe": u_ev["sharpe"],
+                    "filtered_ann_return": f_ev["ann_return"],
+                    "unfiltered_ann_return": u_ev["ann_return"]})
+    return pd.DataFrame(rows)
+
+
+def fold_breakdown(preds: pd.DataFrame, orb: pd.DataFrame) -> pd.DataFrame:
+    """Filtered vs unfiltered Sharpe by test fold - same check as
+    :func:`yearly_breakdown` at fold granularity."""
+    series = logistic_filter_series(preds, orb)
+    rows = []
+    for f, g in preds.groupby("fold"):
+        fold_dates = pd.DatetimeIndex(sorted(g["date"].unique()))
+        full_range = series["unfiltered"].index[
+            (series["unfiltered"].index >= fold_dates.min()) &
+            (series["unfiltered"].index <= fold_dates.max())]
+        f_ev = E._daily_eval(series["filtered"].loc[full_range])
+        u_ev = E._daily_eval(series["unfiltered"].loc[full_range])
+        rows.append({"fold": f, "n_days": len(full_range),
+                    "filtered_sharpe": f_ev["sharpe"], "unfiltered_sharpe": u_ev["sharpe"]})
+    return pd.DataFrame(rows)
+
+
+def cost_sensitivity(preds: pd.DataFrame, orb_variants: dict[str, pd.DataFrame] | None = None,
+                     minute: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Re-evaluates the ALREADY-CHOSEN keep/drop decisions (unchanged -
+    this never refits or reselects a threshold) against ORB re-run at
+    different cost assumptions: gross (no cost at all) and 2x slippage.
+    Isolates whether the filtered-vs-unfiltered Sharpe gap survives
+    without any cost-avoidance-by-trading-less effect.
+
+    ``orb_variants`` lets callers (tests) inject already-computed ORB runs
+    instead of re-running ``src.rules.run_orb`` from 1-min bars (slow, and
+    needs real data) - same DI pattern as
+    ``src.features_open.load_extras``'s ``pred``/``hmm_labels`` params."""
+    if orb_variants is None:
+        if minute is None:
+            minute = dl.load_minute_rth()
+        configs = {
+            "main_cost": R.ORBConfig(),
+            "gross_no_cost": R.ORBConfig(cost_per_share=0.0),
+            "2x_slippage": R.ORBConfig(cost_per_share=R.MAIN_COMMISSION + 2 * R.MAIN_SLIPPAGE),
+        }
+        orb_variants = {name: R.run_orb(minute, cfg=cfg) for name, cfg in configs.items()}
+
+    rows = []
+    for name, orb_variant in orb_variants.items():
+        series = logistic_filter_series(preds, orb_variant)
+        f_ev = E._daily_eval(series["filtered"])
+        u_ev = E._daily_eval(series["unfiltered"])
+        rows.append({"cost_config": name,
+                    "filtered_sharpe": f_ev["sharpe"], "unfiltered_sharpe": u_ev["sharpe"],
+                    "filtered_ann_return": f_ev["ann_return"],
+                    "unfiltered_ann_return": u_ev["ann_return"],
+                    "sharpe_gap": f_ev["sharpe"] - u_ev["sharpe"]})
+    return pd.DataFrame(rows)
 
 
 def main() -> None:

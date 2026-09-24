@@ -84,6 +84,57 @@ def _validation_score(bps_full: pd.Series, kept_dates: pd.DatetimeIndex,
     return sharpe, len(kept_dates) / n_years
 
 
+def _fit_fold(Xy: pd.DataFrame, cols: list[str], f, s: pd.DataFrame,
+             X_index: pd.DatetimeIndex, retention_grid, min_trades_per_year: int):
+    """One fold's model-fit + threshold-selection - the inner loop body
+    shared by :func:`fit_filter_folds` (needs the test-fold predictions)
+    and :func:`coefficient_table` (needs the fitted pipeline) so there is
+    exactly one implementation of the nested split. Returns ``None`` if the
+    fold is skipped (too little fit/validation data), else ``(pipe, best,
+    test_rows)`` where ``test_rows`` is ``Xy`` restricted to this fold's
+    test dates."""
+    train_dates = X_index[f.train_idx]
+    test_dates = X_index[f.test_idx]
+    validation_start = f.test_start - pd.DateOffset(years=1)
+    fit_dates = train_dates[train_dates < validation_start]
+    val_dates = train_dates[train_dates >= validation_start]
+
+    fit_rows = Xy.loc[Xy.index.isin(fit_dates)]
+    val_rows = Xy.loc[Xy.index.isin(val_dates)]
+    if len(fit_rows) < 30 or len(val_rows) < 30:
+        return None
+
+    pipe = Pipeline([("scale", StandardScaler()),
+                     ("clf", LogisticRegression(class_weight="balanced",
+                                                max_iter=1000))])
+    pipe.fit(fit_rows[cols], fit_rows["label"])
+
+    val_proba = pd.Series(pipe.predict_proba(val_rows[cols])[:, 1],
+                          index=val_rows.index)
+    val_signal_dates = val_rows.index
+    bps_val_full = s["bps_return"].reindex(val_dates).fillna(0.0)
+
+    best = None
+    for retention in retention_grid:
+        threshold = float(val_proba.quantile(1 - retention))
+        kept = val_signal_dates[val_proba >= threshold]
+        sharpe, tpy = _validation_score(bps_val_full, kept,
+                                        val_signal_dates,
+                                        min_trades_per_year)
+        if tpy < min_trades_per_year:
+            continue
+        if best is None or sharpe > best["sharpe"] or \
+                (sharpe == best["sharpe"] and retention > best["retention"]):
+            best = {"retention": retention, "threshold": threshold,
+                   "sharpe": sharpe}
+    if best is None:      # shouldn't happen (100% always qualifies if
+        best = {"retention": 1.0,   # ORB itself clears the bar), but
+                "threshold": float(val_proba.min()), "sharpe": np.nan}
+
+    test_rows = Xy.loc[Xy.index.isin(test_dates)]
+    return pipe, best, test_rows
+
+
 def fit_filter_folds(X: pd.DataFrame, orb: pd.DataFrame,
                      retention_grid=RETENTION_GRID,
                      min_trades_per_year: int = MIN_TRADES_PER_YEAR,
@@ -100,45 +151,10 @@ def fit_filter_folds(X: pd.DataFrame, orb: pd.DataFrame,
 
     rows = []
     for f in splitter.folds(X.index):
-        train_dates = X.index[f.train_idx]
-        test_dates = X.index[f.test_idx]
-        validation_start = f.test_start - pd.DateOffset(years=1)
-        fit_dates = train_dates[train_dates < validation_start]
-        val_dates = train_dates[train_dates >= validation_start]
-
-        fit_rows = Xy.loc[Xy.index.isin(fit_dates)]
-        val_rows = Xy.loc[Xy.index.isin(val_dates)]
-        if len(fit_rows) < 30 or len(val_rows) < 30:
+        out = _fit_fold(Xy, cols, f, s, X.index, retention_grid, min_trades_per_year)
+        if out is None:
             continue
-
-        pipe = Pipeline([("scale", StandardScaler()),
-                         ("clf", LogisticRegression(class_weight="balanced",
-                                                    max_iter=1000))])
-        pipe.fit(fit_rows[cols], fit_rows["label"])
-
-        val_proba = pd.Series(pipe.predict_proba(val_rows[cols])[:, 1],
-                              index=val_rows.index)
-        val_signal_dates = val_rows.index
-        bps_val_full = s["bps_return"].reindex(val_dates).fillna(0.0)
-
-        best = None
-        for retention in retention_grid:
-            threshold = float(val_proba.quantile(1 - retention))
-            kept = val_signal_dates[val_proba >= threshold]
-            sharpe, tpy = _validation_score(bps_val_full, kept,
-                                            val_signal_dates,
-                                            min_trades_per_year)
-            if tpy < min_trades_per_year:
-                continue
-            if best is None or sharpe > best["sharpe"] or \
-                    (sharpe == best["sharpe"] and retention > best["retention"]):
-                best = {"retention": retention, "threshold": threshold,
-                       "sharpe": sharpe}
-        if best is None:      # shouldn't happen (100% always qualifies if
-            best = {"retention": 1.0,   # ORB itself clears the bar), but
-                    "threshold": float(val_proba.min()), "sharpe": np.nan}
-
-        test_rows = Xy.loc[Xy.index.isin(test_dates)]
+        pipe, best, test_rows = out
         if test_rows.empty:
             continue
         test_proba = pd.Series(pipe.predict_proba(test_rows[cols])[:, 1],
@@ -154,6 +170,35 @@ def fit_filter_folds(X: pd.DataFrame, orb: pd.DataFrame,
         log.info("fold %d: retention=%.0f%% threshold=%.4f (val sharpe=%.3f)",
                  f.number, best["retention"] * 100, best["threshold"],
                  best["sharpe"])
+    return pd.DataFrame(rows)
+
+
+def coefficient_table(X: pd.DataFrame, orb: pd.DataFrame,
+                      retention_grid=RETENTION_GRID,
+                      min_trades_per_year: int = MIN_TRADES_PER_YEAR,
+                      splitter: WalkForwardSplit = WalkForwardSplit()
+                      ) -> pd.DataFrame:
+    """Per-fold standardized logistic coefficients (one row per fold, one
+    column per feature) - the exact deployed model from :func:`_fit_fold`,
+    not a re-fit, so this matches :func:`fit_filter_folds`'s predictions
+    fold for fold. Coefficients are on the standardized (StandardScaler
+    output) scale, so directly comparable across features within a fold."""
+    s = orb.set_index("day") if "day" in orb.columns else orb
+    labels = build_labels(s)
+    cols = list(OPEN_FEATURE_COLUMNS)
+    Xy = X[cols].join(labels, how="inner").dropna(subset=cols)
+
+    rows = []
+    for f in splitter.folds(X.index):
+        out = _fit_fold(Xy, cols, f, s, X.index, retention_grid, min_trades_per_year)
+        if out is None:
+            continue
+        pipe, best, _ = out
+        coef = pipe.named_steps["clf"].coef_[0]
+        row = {"fold": f.number, "intercept": float(pipe.named_steps["clf"].intercept_[0]),
+              "retention_selected": best["retention"]}
+        row.update({c: float(v) for c, v in zip(cols, coef)})
+        rows.append(row)
     return pd.DataFrame(rows)
 
 

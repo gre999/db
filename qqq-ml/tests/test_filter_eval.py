@@ -144,3 +144,74 @@ def test_missed_big_wins_counts_correctly():
     assert out["n_big_win_days_in_window"] == 10
     assert out["n_dropped"] == 4
     assert set(out["dropped_dates"]) == set(drop_days)
+
+
+# --------------------------------------------------------- block bootstrap
+def test_block_bootstrap_significance_detects_a_planted_large_effect():
+    """A filter that keeps only the strongly-positive days should show a
+    small p-value; block_bootstrap_sharpe_diff is src.backtest's own
+    already-tested function, this only checks the wiring (units, series
+    construction) is correct."""
+    days = pd.bdate_range("2019-01-01", "2022-12-31")
+    rng = np.random.default_rng(9)
+    doji = rng.random(len(days)) < 0.15
+    # two well-separated populations so the effect is not noise-sized
+    good = rng.normal(0, 1, len(days)) > 0
+    r_net = np.where(good, rng.normal(3.0, 0.5, len(days)), rng.normal(-3.0, 0.5, len(days)))
+    bps_return = np.where(doji, 0.0, r_net * 20.0)
+    orb_strong = pd.DataFrame({"day": days, "traded": ~doji,
+                              "r_net": np.where(doji, np.nan, r_net),
+                              "bps_return": bps_return}).set_index("day")
+    signal_days = orb_strong.index[orb_strong["traded"]]
+    preds_strong = pd.DataFrame({
+        "date": signal_days, "fold": 1,
+        "keep": good[orb_strong["traded"].to_numpy()],
+    })
+    out = FE.block_bootstrap_significance(preds_strong, orb_strong, n_boot=300)
+    assert out["observed_sharpe_diff"] > 0
+    assert out["p_value"] < 0.05
+
+
+def test_random_filter_p_value_matches_manual_rank(orb, preds):
+    null = FE.random_filter_null(preds, orb, n_reps=200, seed=3)
+    out = FE.random_filter_p_value(preds, orb, null=null)
+    observed = E._daily_eval(FE.logistic_filter_series(preds, orb)["filtered"])["sharpe"]
+    manual_p = float(np.mean(null >= observed))
+    assert out["observed_sharpe"] == pytest.approx(observed)
+    assert out["p_value"] == pytest.approx(manual_p)
+    assert out["rank_from_top"] == int(np.sum(null >= observed)) + 1
+
+
+# ------------------------------------------------------- yearly/fold breakdown
+def test_yearly_breakdown_covers_every_year_in_window(orb, preds):
+    yb = FE.yearly_breakdown(preds, orb)
+    expected_years = set(orb.index.year) & set(pd.DatetimeIndex(preds["date"]).year)
+    assert set(yb["year"]) == expected_years
+    assert (yb["n_days"] > 0).all()
+
+
+def test_fold_breakdown_one_row_per_fold(orb, preds):
+    fb = FE.fold_breakdown(preds, orb)
+    assert set(fb["fold"]) == set(preds["fold"].unique())
+    assert (fb["n_days"] > 0).all()
+
+
+# --------------------------------------------------------- cost sensitivity
+def test_cost_sensitivity_orders_sharpe_by_cost_and_uses_injected_variants(orb, preds):
+    """Higher cost must strictly lower both filtered and unfiltered Sharpe
+    (same trades, more expensive) - checks the DI wiring end to end without
+    touching real 1-min bar data."""
+    def bump_cost(o: pd.DataFrame, extra_bps: float) -> pd.DataFrame:
+        o2 = o.copy()
+        traded = o2["traded"]
+        o2.loc[traded, "bps_return"] = o2.loc[traded, "bps_return"] - extra_bps
+        o2.loc[traded, "r_net"] = o2.loc[traded, "r_net"] - extra_bps / 20.0
+        return o2
+
+    variants = {"low_cost": orb, "high_cost": bump_cost(orb, 5.0)}
+    out = FE.cost_sensitivity(preds, orb_variants=variants)
+    low = out[out["cost_config"] == "low_cost"].iloc[0]
+    high = out[out["cost_config"] == "high_cost"].iloc[0]
+    assert high["filtered_sharpe"] < low["filtered_sharpe"]
+    assert high["unfiltered_sharpe"] < low["unfiltered_sharpe"]
+    assert set(out["cost_config"]) == set(variants)
