@@ -143,6 +143,28 @@ def main() -> None:
          "paper_max_dd": -R.VWAP_PAPER_MAX_DD, "repl_max_dd": round(ev_vwap["max_drawdown"], 4)},
     ])
 
+    # ---- VWAP cost sensitivity: same paper window, unit exposure, cost rate only
+    vwap_window_main = vwap.loc[R.VWAP_PAPER_WINDOW[0]:R.VWAP_PAPER_WINDOW[1]]
+    ret_main = vwap_window_main["bps_return"] / 1e4
+    sharpe_unit_main = ret_main.mean() / ret_main.std(ddof=0) * np.sqrt(252)
+
+    vwap_replcost = R.run_vwap(minute, cfg=R.VWAPConfig(
+        cost_per_share=R.REPL_COMMISSION + R.REPL_SLIPPAGE))
+    vwap_window_replcost = vwap_replcost.loc[R.VWAP_PAPER_WINDOW[0]:R.VWAP_PAPER_WINDOW[1]]
+    ret_replcost = vwap_window_replcost["bps_return"] / 1e4
+    sharpe_unit_replcost = ret_replcost.mean() / ret_replcost.std(ddof=0) * np.sqrt(252)
+
+    cost_sens_tbl = pd.DataFrame([
+        {"setting": "unit exposure, main cost ($0.0045/share)",
+         "mean_bps_per_day": round(vwap_window_main["bps_return"].mean(), 2),
+         "sharpe": round(sharpe_unit_main, 3)},
+        {"setting": "unit exposure, paper cost ($0.0005/share)",
+         "mean_bps_per_day": round(vwap_window_replcost["bps_return"].mean(), 2),
+         "sharpe": round(sharpe_unit_replcost, 3)},
+        {"setting": "replication (paper cost + compounding position)",
+         "mean_bps_per_day": "—", "sharpe": round(ev_vwap["sharpe"], 3)},
+    ])
+
     # ---- state selection
     sel_tbl = selection.copy()
     sel_tbl["value"] = sel_tbl["value"].round(3)
@@ -209,6 +231,18 @@ def main() -> None:
 {_md_table(repl_tbl)}
 
 兩個策略的夏普、最大回撤都跟論文數字同一個量級，複現通過。
+
+**VWAP 的單位曝險夏普，限定在論文同一個取樣期間，是 {round(sharpe_unit_main,2)}，跟複現模式
+（{round(ev_vwap['sharpe'],2)}）還是差不小，拆解過原因**：同一段期間、同一組交易，只把成本從
+主設定換成論文的複現成本，其他不變：
+
+{_md_table(cost_sens_tbl)}
+
+成本假設從 $0.0045/股換成 $0.0005/股，夏普從 {round(sharpe_unit_main,2)} 跳到
+{round(sharpe_unit_replcost,2)}，吃掉了缺口的大部分；剩下的一小段才是複利部位造成的。VWAP 平均
+每天反手 16.6 次（33 個股數邊），對成本假設極度敏感——**真實交易成本下，VWAP 的夏普大約只有
+論文（近乎零成本）假設下的一半**，這是本週除了合理性檢查之外最重要的一個發現，不是複現失敗，
+是策略本身的成本敏感度問題，下週評估各狀態下的績效時要記得用主成本、不要用論文的複現成本。
 
 ## 三、全樣本基準（不分狀態）
 
