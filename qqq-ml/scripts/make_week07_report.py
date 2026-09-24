@@ -100,6 +100,11 @@ def main() -> None:
     autocorr_desc_tbl = rnd(pd.DataFrame(autocorr_desc_rows).drop(columns=["k", "n"]))
     ext_rv_tbl = as_int(rnd(pd.concat(ext_rv_rows, ignore_index=True)), ["state", "n"])
     ext_closeloc_tbl = as_int(rnd(pd.concat(ext_closeloc_rows, ignore_index=True)), ["state", "n"])
+    ext_rv_diff = {}
+    for _, row in ext_rv_tbl.iterrows():
+        if row["state"] == "0":
+            continue
+        ext_rv_diff.setdefault(row["model"], {})[row["state"]] = row["diff_vs_state0"]
 
     # ---------------------------------------------------------------
     # Part 2 + 3: performance & significance (predictive labels only)
@@ -407,13 +412,18 @@ ORB、VWAP 兩個策略上都是過濾後變好；HMM、波動三分位在兩個
 上一節「所有狀態 vs 全樣本差異都不顯著」的結果，這裡看到的夏普差異比較合理的解讀是**逐折
 選中哪個訓練段正報酬狀態的雜訊**，不是穩健、可依賴的可交易訊號。
 
-這個二分反而讓「雜訊」的判讀更有說服力，而不是更可疑：第一節量出來的一致率（HMM
-kappa={kappa_by_model['HMM']:.3f}，KMeans kappa={kappa_by_model['KMeans']:.3f}——KMeans
-的狀態分類是三者中最不穩定、最接近隨機的），但過濾後唯一「有幫助」的偏偏是狀態定義最不
-可預測的 KMeans，HMM（狀態持續性最強、最可預測）和波動三分位（有明確經濟意義）反而都
-變差。如果過濾效果是真的狀態訊號，應該是可預測、可解釋的狀態來源比較有機會有效，不會是
-一致率最接近隨機的那個——這個方向剛好反過來，說明過濾效果跟狀態本身是否有意義無關，不會
-把任何一組（包括 KMeans）看起來較好的結果當作正面結論。
+這個二分反而讓「雜訊」的判讀更有說服力，而不是更可疑。KMeans 的狀態持續性本來就低
+（kappa={kappa_by_model['KMeans']:.3f}，遠低於 HMM 的 {kappa_by_model['HMM']:.3f}——這個
+kappa 只說明「狀態換得比較快、比較不穩定」，不是「比較不能事先判定」，那件事第一節已經
+說明要用模型外驗證判斷，不能用 kappa，因為 kappa 混雜了結構平滑）。用模型外驗證的波動
+分離幅度來看「事先判定能力」：KMeans 兩個非基準狀態跟 state 0 的已實現波動差距是
+{ext_rv_diff['KMeans']['1']}／{ext_rv_diff['KMeans']['2']}，HMM 是
+{ext_rv_diff['HMM']['1']}／{ext_rv_diff['HMM']['2']}——KMeans 的狀態把波動分得比較不開，
+事先判定能力本來就比 HMM 弱。過濾後唯一「有幫助」的偏偏是這個分離能力較弱的 KMeans，
+分離能力較強的 HMM 和有明確經濟意義的波動三分位反而都變差。如果過濾效果是真的狀態訊號，
+應該是波動分得比較開、比較可解釋的狀態來源比較有機會有效，不會是分離能力較弱的那個——
+這個方向剛好反過來，說明過濾效果跟狀態本身是否有意義無關，不會把任何一組（包括 KMeans）
+看起來較好的結果當作正面結論。
 
 各折訓練段正報酬狀態（供覆核）：
 
