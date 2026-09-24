@@ -7,6 +7,31 @@ data from another fold. Callers get the fold windows from
 :func:`fold_windows`, which reads them off an already-saved walk-forward
 run instead of re-deriving folds (every model in a run shares the same
 splitter, so any one of them - HAR, random walk - has the same windows).
+
+**Rolling windows here follow one of two patterns - know which one applies
+before adding a new function** (this distinction is what
+``historical_vol_weight`` got wrong until it was caught by
+``tests/test_strategies.py::test_historical_vol_weight_excludes_the_same_day_return``):
+
+1. Input is a *realized* quantity for session s that only becomes known at
+   or during s itself (e.g. ``ret_cc`` - s's own close-to-close return).
+   A window ending at row t must exclude t: ``x.shift(1).rolling(window)``.
+   Skipping the ``shift(1)`` lets row t's output see t's own not-yet-
+   happened return - and if that output is then used (as every weight
+   here is, via ``src/backtest.py``) to earn t's return, that is a direct
+   look-ahead leak, not just an off-by-one.
+2. Input is itself already a *forecast/decision* value for session s, one
+   that by construction only used information available before s (e.g.
+   ``var_cc`` from :func:`cc_variance_forecast` - a model's prediction for
+   day s made from day s-1's close). Including index t's own value in a
+   window ending at t is then correct, not a leak: that value was already
+   "known" before t started. ``smooth_variance_forecast`` relies on this;
+   see its docstring and
+   ``tests/test_strategies.py::test_smooth_variance_forecast_is_causal_trailing_mean``.
+
+When in doubt, test empirically (perturb the input at index t only and
+check whether output[t] changes - see the two tests named above) rather
+than reasoning it through, the way this file's own bug was found.
 """
 from __future__ import annotations
 

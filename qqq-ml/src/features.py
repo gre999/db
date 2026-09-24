@@ -37,6 +37,19 @@ day) with :func:`register`, e.g.::
     @register("open5m_rel_volume", "open_5m", "first 5-min volume / ...")
     def _f(ctx): ...
 
+Every registered feature is automatically covered by
+``tests/test_features.py::test_truncation_features_unchanged`` (rebuilds
+it from data truncated at its own cutoff and requires an identical value)
+and ``test_label_time_after_every_feature_cutoff`` - no extra test needed
+per feature. This is the project's strongest look-ahead safety net; when a
+new feature's information doesn't fit naturally into a ``FeatureContext``
+quantity (e.g. it needs data from outside ``MarketData``), prefer building
+it here over a bespoke helper elsewhere in ``src/`` - a rolling window
+outside this registry (as in ``src/strategies.py``) needs its own,
+hand-written causality test instead, and that class of check is easy to
+get wrong (see ``historical_vol_weight``'s history in
+``reports/week05_review_notes.md``).
+
 Values produced outside this module (e.g. stage-2 model forecasts) can be
 passed to :func:`build_feature_matrix` via ``extras`` with their cutoff;
 their producer is responsible for their own information timing.

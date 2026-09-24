@@ -33,9 +33,58 @@ t 日的部位權重用到了 t 日自己的收盤到收盤報酬，而這個權
 | hist20−HAR 部位差對當天報酬的迴歸斜率 | p=0.006（顯著） | p=0.45（不顯著） |
 
 **上一輪的「20 日歷史波動贏在報酬擇時」是這個 bug 的直接產物，不是真正的發現，已經撤回。**
-第十、十一、十二節（平滑／換目標／加特徵）的實驗本身沒有用到 `historical_vol_weight`，數字
-依然有效，但它們原本「能不能追上 hist20」的框架已經不成立——沒有顯著差距需要追。下面的「發現」
-已經照修正後的結果重寫。
+（連帶撤回的還有一個更早的判斷：我曾建議把 20 日歷史波動當階段三市場狀態分類的出發點，理由是
+它「已經證明是有效的擇時訊號」——這個理由不成立，一併撤回。）第十、十一、十二節（平滑／換目標／
+加特徵）的實驗本身沒有用到 `historical_vol_weight`，數字依然有效，但它們原本「能不能追上
+hist20」的框架已經不成立——沒有顯著差距需要追。下面的「發現」已經照修正後的結果重寫。
+
+## 進入階段三之前：全面前視偏誤複查
+
+按要求做了一次系統性複查，而不是只補修那一個函式。方法：列出 `src/` 底下每一處
+`.rolling(`／`.shift(`（`grep -rn`），逐一判斷；`strategies.py` 的部位計算特別檢查 shift
+方向；能用截斷測試驗證的就用截斷測試驗證，不能的就寫扰動測試。
+
+**結果：只有 `historical_vol_weight` 有問題，其他都沒事**——但不是「看過去就好」，每一個都有
+理由或測試支持：
+
+* **`src/features.py` 裡所有 `@register` 的特徵**（`har_rv_*`、`rskew_1d`、`rkurt_1d`、
+  `volume_rel_20d`、`vix_1d`/`vxn_1d`、`hist_cc_var_20d` 等）：這個模組有專門的截斷測試機制
+  （`tests/test_features.py::test_truncation_features_unchanged`），拿 `MarketData.truncate()`
+  把資料砍到每個特徵自己宣告的 cutoff 時間點，重新算一次，要求數值完全一樣——這比單純「扰動
+  未來看過去變不變」更嚴格，連「用到當天自己」這種問題都測得到。目前全部通過，包含 Week 5 新
+  加的 `hist_cc_var_20d`（因為照 `ctx.rolling_mean` 的寫法，自動套用這個機制，不需要另外寫
+  測試）。`volume_rel_20d` 特別用扰動測試額外驗證過一次（同一交易日的成交量狂飆 50 倍，只影響
+  隔天的特徵值，不影響當天自己）——寫法上它的 20 日視窗確實沒排除當天，但因為外面還包一層
+  `ctx.lag`（整體再位移一天），兩層合起來是對的，這跟 `historical_vol_weight` 的錯誤寫法看起來
+  相似、其實不一樣，值得記一筆避免以後看錯。
+* **`src/data_loader.py`、`src/metrics.py` 的 `.shift`/`.rolling`**：都是在還原歷史事實（股利
+  推算、`ret_cc`/`ret_overnight` 定義、anomaly 標記、`jump_days` 評估切片），不是決策管線的
+  輸入，不適用「前視偏誤」這個框架——它們本來就允許看到完整歷史。
+* **`src/strategies.py` 的部位計算**（這是這次重點）：
+  * `historical_vol_weight`——修好了。
+  * `smooth_variance_forecast`——沒有 shift，但**這是對的**：它平滑的是模型自己的預測
+    （`var_cc`），而不是已實現報酬；`var_cc[t]` 本身已經是「用 t-1 收盤前資訊做出的預測」，
+    在 t 這一列看到它不算洩漏。新增一個測試明確鎖住這個設計（`test_smooth_variance_forecast_
+    legitimately_uses_input_at_t`），避免以後被「修」成錯的。
+  * `scale_ratios`、`premium_thresholds`——不是滾動視窗，是「只用該折訓練段」的聚合；補了
+    `premium_thresholds` 原本缺的扰動測試（`scale_ratios` 已經有），兩個都確認訓練段以外的
+    資料變動不影響結果。
+  * `vol_target_weight`、`variance_risk_premium`、`strategy_n_weight`、`cc_variance_forecast`、
+    `buy_and_hold_weight`——都是逐列的代數運算，不牽涉時間窗口，只要輸入本身沒問題就沒問題。
+  * `src/backtest.py::run_backtest` 的 `next_open` 執行時點——用昨天已經決定好的部位賺隔夜段、
+    今天新部位賺日內段，兩段都只用到決策當下已知的資訊，沒問題（已有測試）。
+
+**寫進測試、之後自動套用**：
+1. `src/features.py` 的截斷測試機制本來就是自動的——任何用 `@register` 加進去的新特徵，不用
+   多寫一行測試就會被 `test_truncation_features_unchanged` 檢查。階段三、四如果新特徵能塞進
+   `FeatureContext`，優先走這條路（已經在 `features.py` 模組開頭加了一段說明，講清楚什麼時候
+   該走這裡、什麼時候不行）。
+2. `src/strategies.py` 沒有這種通用機制（部位規則的函式簽名太不一致，套不進同一個截斷框架），
+   改成寫了一個共用的測試小工具
+   `tests/test_strategies.py::assert_output_at_t_unaffected_by_input_at_t`（扰動輸入在 t 的
+   值、確認輸出在 t 不變），任何新的「realized 報酬進、部位權重出」的函式都可以直接一行套用；
+   同時在 `strategies.py` 模組開頭寫清楚兩種模式的差別（輸入是「已實現」還是「已經是預測」）
+   讓下次寫新規則時，動筆前就知道自己的函式屬於哪一種。
 
 ## 結論
 

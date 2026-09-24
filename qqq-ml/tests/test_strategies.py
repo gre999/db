@@ -12,6 +12,30 @@ FOLDS = pd.DataFrame({"fold": [1, 2], "train_start": pd.to_datetime(
     ["2016-12-31", "2017-12-31"])})
 
 
+def assert_output_at_t_unaffected_by_input_at_t(fn, base: pd.Series, t_pos: int,
+                                                **kwargs) -> None:
+    """Reusable look-ahead probe for a Series -> Series weight/forecast function.
+
+    Perturbs ``base`` at a single position ``t_pos`` and checks ``fn``'s
+    output at that same position doesn't move - the same check that caught
+    ``historical_vol_weight``'s bug (see its test). Use this for any new
+    position-sizing function whose input is a *realized* quantity (pattern
+    1 in this module's docstring); it is the wrong check for pattern-2
+    functions like ``smooth_variance_forecast``, where index t legitimately
+    depends on input[t].
+    """
+    out = fn(base, **kwargs)
+    perturbed = base.copy()
+    perturbed.iloc[t_pos] = perturbed.iloc[t_pos] + 10 * (
+        perturbed.abs().max() + 1.0)
+    out2 = fn(perturbed, **kwargs)
+    assert out.iloc[t_pos] == pytest.approx(out2.iloc[t_pos], nan_ok=True), (
+        f"{fn.__name__} output at position {t_pos} changed when only the "
+        f"input at that same position was perturbed - likely a look-ahead "
+        f"leak (input[t] used to produce output[t], which then earns "
+        f"period t's return in src/backtest.py)")
+
+
 def test_scale_ratios_uses_training_window_only():
     idx = pd.bdate_range("2016-01-01", "2018-12-31")
     rng = np.random.default_rng(0)
@@ -67,16 +91,26 @@ def test_historical_vol_weight_is_causal():
 def test_historical_vol_weight_excludes_the_same_day_return():
     """The weight at index t earns ret_cc[t] in the backtest (see
     src/backtest.py's timing convention), so it must be decided without
-    seeing ret_cc[t] itself - only sessions strictly before t."""
+    seeing ret_cc[t] itself - only sessions strictly before t. This is
+    exactly the check that caught the original bug (20-day window included
+    the current day): historical_vol_weight's window is over a *realized*
+    return (pattern 1 in the module docstring), unlike
+    smooth_variance_forecast's window over an already-lagged forecast
+    (pattern 2, see test below)."""
     idx = pd.bdate_range("2020-01-01", periods=30)
-    ret = pd.Series(0.01, index=idx)
-    w = S.historical_vol_weight(ret, window=20, vol_target=0.15, leverage_cap=10.0)
+    rng = np.random.default_rng(2)
+    ret = pd.Series(rng.normal(0, 0.01, len(idx)), index=idx)
+    assert_output_at_t_unaffected_by_input_at_t(
+        lambda r: S.historical_vol_weight(r, window=20, vol_target=0.15,
+                                          leverage_cap=10.0),
+        ret, t_pos=25)
 
+    # and confirm later days DO legitimately depend on day 25
     ret2 = ret.copy()
-    ret2.iloc[25] = 5.0                       # perturb only day 25 itself
+    ret2.iloc[25] = 5.0
+    w = S.historical_vol_weight(ret, window=20, vol_target=0.15, leverage_cap=10.0)
     w2 = S.historical_vol_weight(ret2, window=20, vol_target=0.15, leverage_cap=10.0)
-    assert w.iloc[25] == pytest.approx(w2.iloc[25])
-    assert not w.iloc[26:].equals(w2.iloc[26:])   # later days do see it
+    assert not w.iloc[26:].equals(w2.iloc[26:])
 
 
 def test_smooth_variance_forecast_is_causal_trailing_mean():
@@ -91,6 +125,22 @@ def test_smooth_variance_forecast_is_causal_trailing_mean():
     var2.iloc[20:] *= 100          # perturb only the future
     sm2 = S.smooth_variance_forecast(var2, window=5)
     pd.testing.assert_series_equal(sm.iloc[:20], sm2.iloc[:20])
+
+
+def test_smooth_variance_forecast_legitimately_uses_input_at_t():
+    """By design (pattern 2 in the module docstring) - var_cc[t] is already
+    a forecast decided before day t started, so output[t] depending on
+    var_cc[t] is correct, not a leak. This locks that choice in so nobody
+    "fixes" it into historical_vol_weight's pattern by mistake."""
+    idx = pd.bdate_range("2020-01-01", periods=10)
+    var = pd.Series(np.arange(1, 11, dtype=float), index=idx)
+    sm = S.smooth_variance_forecast(var, window=5)
+
+    var2 = var.copy()
+    var2.iloc[7] = 999.0            # perturb only day 7's own forecast
+    sm2 = S.smooth_variance_forecast(var2, window=5)
+    assert sm.iloc[7] != pytest.approx(sm2.iloc[7])   # output[7] DOES see it
+    pd.testing.assert_series_equal(sm.iloc[:7], sm2.iloc[:7])  # earlier rows don't
 
 
 def test_buy_and_hold_weight_is_one():
@@ -123,3 +173,16 @@ def test_premium_thresholds_and_strategy_n_weight():
     below = premium < fold.map(thr)
     assert (out[below] == 0.6).all()
     assert (out[~below] == 1.0).all()
+
+
+def test_premium_thresholds_uses_training_window_only():
+    idx = pd.bdate_range("2016-01-01", "2018-12-31")
+    rng = np.random.default_rng(4)
+    premium = pd.Series(rng.normal(0, 0.01, len(idx)), index=idx)
+    thr = S.premium_thresholds(premium, FOLDS, q=0.25)
+
+    premium2 = premium.copy()
+    outside = idx[(idx < "2016-01-01") | (idx > "2017-12-31")]
+    premium2.loc[outside] *= 100      # perturb everything outside every fold's window
+    thr2 = S.premium_thresholds(premium2, FOLDS, q=0.25)
+    pd.testing.assert_series_equal(thr, thr2, check_names=False)
