@@ -77,11 +77,15 @@ def main() -> None:
     agree_rows, autocorr_pred_rows, autocorr_desc_rows = [], [], []
     duration_tbls, transmat_tbls, ext_rv_rows, ext_closeloc_rows = {}, {}, [], []
     for model in ("hmm", "kmeans"):
-        agree_rows.append({"model": MODEL_LABEL[model], **E.state_agreement(pred, desc, model)})
-        autocorr_pred_rows.append({"model": MODEL_LABEL[model],
-                                   **E.label_autocorrelation(pred, model)})
-        autocorr_desc_rows.append({"model": MODEL_LABEL[model],
-                                   **E.label_autocorrelation(desc, model)})
+        agree = E.state_agreement(pred, desc, model)
+        agree["model"] = MODEL_LABEL[model]     # overwrite in place, keeps "model" first
+        agree_rows.append(agree)
+        auto_pred = E.label_autocorrelation(pred, model)
+        auto_pred["model"] = MODEL_LABEL[model]
+        autocorr_pred_rows.append(auto_pred)
+        auto_desc = E.label_autocorrelation(desc, model)
+        auto_desc["model"] = MODEL_LABEL[model]
+        autocorr_desc_rows.append(auto_desc)
         duration_tbls[model] = E.state_durations(pred, model)
         transmat_tbls[model] = E.empirical_transition_matrix(pred, model)
         ext_rv = E.external_validation(pred, desc_feat, model, "log_rv_desc")
@@ -90,6 +94,7 @@ def main() -> None:
         ext_cl = E.external_validation(pred, desc_feat, model, "abs_close_loc_dev")
         ext_cl.insert(0, "model", MODEL_LABEL[model])
         ext_closeloc_rows.append(ext_cl)
+    kappa_by_model = {r["model"]: r["kappa"] for r in agree_rows}
     agree_tbl = rnd(pd.DataFrame(agree_rows).drop(columns=["k", "n"]))
     autocorr_pred_tbl = rnd(pd.DataFrame(autocorr_pred_rows).drop(columns=["k", "n"]))
     autocorr_desc_tbl = rnd(pd.DataFrame(autocorr_desc_rows).drop(columns=["k", "n"]))
@@ -397,11 +402,18 @@ OOS 範圍（含 {yearly_notes['vwap'][0]} 年）的不過濾夏普是 {yearly_n
 樣本早期表現差的那一年排除在外**——用「模型學會避開的是不是只有 2019 年那種特定情況」這個
 角度去檢查，而不是只看篩選後的夏普有沒有變好。
 
-過濾後的夏普、最大回撤，六組（策略 × 狀態來源）之間的方向並不一致——KMeans 兩個策略都是
-過濾後變好，HMM／波動三分位則有增有減，ORB 甚至在 HMM／波動三分位下過濾後更差。對照上一節
-「所有狀態 vs 全樣本差異都不顯著」的結果，這裡看到的夏普差異比較合理的解讀是**逐折選中
-哪個訓練段正報酬狀態的雜訊**，不是穩健、可依賴的可交易訊號——不會把任何一組看起來較好的
-結果（例如 KMeans）當作正面結論。
+過濾後的夏普、最大回撤，六組（策略 × 狀態來源）之間的方向很乾淨地分成兩邊：**KMeans 在
+ORB、VWAP 兩個策略上都是過濾後變好；HMM、波動三分位在兩個策略上都是過濾後變差**。對照
+上一節「所有狀態 vs 全樣本差異都不顯著」的結果，這裡看到的夏普差異比較合理的解讀是**逐折
+選中哪個訓練段正報酬狀態的雜訊**，不是穩健、可依賴的可交易訊號。
+
+這個二分反而讓「雜訊」的判讀更有說服力，而不是更可疑：第一節量出來的一致率（HMM
+kappa={kappa_by_model['HMM']:.3f}，KMeans kappa={kappa_by_model['KMeans']:.3f}——KMeans
+的狀態分類是三者中最不穩定、最接近隨機的），但過濾後唯一「有幫助」的偏偏是狀態定義最不
+可預測的 KMeans，HMM（狀態持續性最強、最可預測）和波動三分位（有明確經濟意義）反而都
+變差。如果過濾效果是真的狀態訊號，應該是可預測、可解釋的狀態來源比較有機會有效，不會是
+一致率最接近隨機的那個——這個方向剛好反過來，說明過濾效果跟狀態本身是否有意義無關，不會
+把任何一組（包括 KMeans）看起來較好的結果當作正面結論。
 
 各折訓練段正報酬狀態（供覆核）：
 
