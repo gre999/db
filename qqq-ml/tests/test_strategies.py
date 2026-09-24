@@ -55,13 +55,28 @@ def test_historical_vol_weight_is_causal():
     rng = np.random.default_rng(1)
     ret = pd.Series(rng.normal(0, 0.01, len(idx)), index=idx)
     w = S.historical_vol_weight(ret, window=20, vol_target=0.15, leverage_cap=3.0)
-    assert w.iloc[:19].isna().all()          # not enough history yet
-    assert w.iloc[19:].notna().all()
+    assert w.iloc[:20].isna().all()          # not enough *prior* history yet
+    assert w.iloc[20:].notna().all()
 
     ret2 = ret.copy()
     ret2.iloc[40:] = ret2.iloc[40:] * 50      # blow up only the "future"
     w2 = S.historical_vol_weight(ret2, window=20, vol_target=0.15, leverage_cap=3.0)
     pd.testing.assert_series_equal(w.iloc[:40], w2.iloc[:40])
+
+
+def test_historical_vol_weight_excludes_the_same_day_return():
+    """The weight at index t earns ret_cc[t] in the backtest (see
+    src/backtest.py's timing convention), so it must be decided without
+    seeing ret_cc[t] itself - only sessions strictly before t."""
+    idx = pd.bdate_range("2020-01-01", periods=30)
+    ret = pd.Series(0.01, index=idx)
+    w = S.historical_vol_weight(ret, window=20, vol_target=0.15, leverage_cap=10.0)
+
+    ret2 = ret.copy()
+    ret2.iloc[25] = 5.0                       # perturb only day 25 itself
+    w2 = S.historical_vol_weight(ret2, window=20, vol_target=0.15, leverage_cap=10.0)
+    assert w.iloc[25] == pytest.approx(w2.iloc[25])
+    assert not w.iloc[26:].equals(w2.iloc[26:])   # later days do see it
 
 
 def test_smooth_variance_forecast_is_causal_trailing_mean():

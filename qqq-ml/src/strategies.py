@@ -101,12 +101,17 @@ def smooth_variance_forecast(var_cc: pd.Series, window: int = 20) -> pd.Series:
 def historical_vol_weight(ret_cc: pd.Series, window: int = 20,
                           vol_target: float = 0.15,
                           leverage_cap: float = 1.5) -> pd.Series:
-    """Trailing-realized-vol target: a causal rolling window ending at t.
+    """Trailing-realized-vol target: sessions t-window..t-1, excluding t.
 
-    No fold calibration needed - ``ret_cc`` is already the close-to-close
-    return, so the rolling variance is already on the close-to-close scale.
+    The weight at index t is "decided using information available at
+    (t-1)'s close" - the same convention every model source uses (see
+    ``src/backtest.py``'s module docstring) - so it must never include
+    ``ret_cc[t]`` itself: that return is the one this weight is then used
+    to earn. No fold calibration needed - ``ret_cc`` is already the
+    close-to-close return, so the rolling variance is already on the
+    close-to-close scale.
     """
-    var = ret_cc.rolling(window, min_periods=window).var(ddof=0)
+    var = ret_cc.shift(1).rolling(window, min_periods=window).var(ddof=0)
     return vol_target_weight(var, vol_target, leverage_cap)
 
 
