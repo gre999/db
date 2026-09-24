@@ -176,6 +176,105 @@ def test_standardization_fit_on_training_window_only(synth_X):
 
 
 # --------------------------------------------------------------------------
+# Week 7: coverage-based k selection (main analysis config)
+# --------------------------------------------------------------------------
+def test_state_coverage_sums_to_one():
+    states = np.array([0, 0, 0, 1, 1, 2])
+    cov = G.state_coverage(states, 3)
+    np.testing.assert_allclose(cov, [0.5, 1 / 3, 1 / 6])
+    assert cov.sum() == pytest.approx(1.0)
+
+
+def test_select_k_by_coverage_picks_largest_qualifying_k():
+    # k=2: balanced (qualifies); k=3: one tiny state (fails at 15%)
+    def fit_fn(Xtr, k):
+        n = len(Xtr)
+        if k == 2:
+            states = np.array([0] * (n // 2) + [1] * (n - n // 2))
+        else:
+            states = np.array([0] * (n - 5) + [1] * 3 + [2] * 2)
+        return {"k": k}, states
+
+    Xtr = pd.DataFrame({"x": range(100)})
+    sel = G.select_k_by_coverage(fit_fn, Xtr, k_choices=(2, 3), min_state_frac=0.15)
+    assert sel["k"] == 2
+    assert sel["fits"][3]["min_coverage"] < 0.15
+    assert sel["fits"][2]["min_coverage"] >= 0.15
+
+
+def test_select_k_by_coverage_falls_back_to_smallest_when_none_qualify():
+    def fit_fn(Xtr, k):
+        n = len(Xtr)
+        states = np.array([0] * (n - 1) + [1] * 0 + [k - 1] * 1)  # tiny minority always
+        return {"k": k}, states
+
+    Xtr = pd.DataFrame({"x": range(50)})
+    sel = G.select_k_by_coverage(fit_fn, Xtr, k_choices=(2, 3), min_state_frac=0.15)
+    assert sel["k"] == 2                    # falls back to min(k_choices)
+
+
+def test_fit_hmm_fold_main_uses_training_window_only(synth_X):
+    f0 = WalkForwardSplit().folds(synth_X.index)[0]
+    Xtr = synth_X.iloc[f0.train_idx]
+    Xte = synth_X.iloc[f0.test_idx]
+
+    fit1 = G.fit_hmm_fold_main(Xtr, n_init=2)
+    X2 = synth_X.copy()
+    rng = np.random.default_rng(9)
+    X2.loc[Xte.index, :] = rng.normal(size=(len(Xte), X2.shape[1]))
+    fit2 = G.fit_hmm_fold_main(X2.iloc[f0.train_idx], n_init=2)
+
+    assert fit1["k"] == fit2["k"]
+    np.testing.assert_allclose(fit1["model"].means_, fit2["model"].means_)
+    np.testing.assert_allclose(fit1["final_dist"], fit2["final_dist"])
+
+
+def test_fit_hmm_fold_fixed_k_ignores_coverage(synth_X):
+    """Main cross-fold tables force k=3 in every fold regardless of that
+    fold's own coverage-selection outcome - fixed_k must not apply the
+    15%-coverage fallback at all."""
+    f0 = WalkForwardSplit().folds(synth_X.index)[0]
+    Xtr = synth_X.iloc[f0.train_idx]
+    fit = G.fit_hmm_fold_fixed_k(Xtr, k=3, n_init=2)
+    assert fit["k"] == 3
+    assert fit["model"].n_components == 3
+
+
+def test_fit_kmeans_fold_fixed_k_ignores_coverage(synth_X):
+    f0 = WalkForwardSplit().folds(synth_X.index)[0]
+    Xtr = synth_X.iloc[f0.train_idx]
+    fit = G.fit_kmeans_fold_fixed_k(Xtr, k=3, n_init=2)
+    assert fit["k"] == 3
+    assert fit["model"].n_clusters == 3
+
+
+def test_fit_kmeans_fold_main_respects_min_state_frac(synth_X):
+    f0 = WalkForwardSplit().folds(synth_X.index)[0]
+    Xtr = synth_X.iloc[f0.train_idx]
+    fit = G.fit_kmeans_fold_main(Xtr, k_choices=(2, 3), min_state_frac=0.15)
+    assert fit["k"] in (2, 3)
+    cov = np.array(fit["coverage_by_k"][fit["k"]])
+    assert cov.min() >= 0.15 - 1e-9 or fit["k"] == 2
+
+
+def test_run_fixed_k_uses_same_k_every_fold(synth_X):
+    out = G.run_fixed_k(synth_X, k=3, n_init=2, save=False)
+    labels = out["labels"]
+    assert (labels["k"] == 3).all()
+    for model in ("hmm", "kmeans"):
+        s = labels[labels["model"] == model]["state"]
+        assert s.min() >= 0 and s.max() <= 2
+
+
+def test_run_fixed_k_works_on_a_differently_named_vol_column(synth_X):
+    """Stand-in for the descriptive matrix, which ranks by log_rv_desc
+    instead of har_logrv_1d."""
+    X = synth_X.rename(columns={"har_logrv_1d": "log_rv_desc"})
+    out = G.run_fixed_k(X, k=2, n_init=2, vol_feature="log_rv_desc", save=False)
+    assert (out["labels"]["k"] == 2).all()
+
+
+# --------------------------------------------------------------------------
 # End to end sanity
 # --------------------------------------------------------------------------
 def test_run_produces_ranked_states_and_full_oos_coverage(synth_X):

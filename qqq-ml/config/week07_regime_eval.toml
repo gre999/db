@@ -1,0 +1,81 @@
+# Week 7 (phase 3, week 2) main-analysis config for regime x strategy
+# evaluation. Fixed BEFORE looking at any state's performance numbers -
+# see reports/week07_regime_eval.md section 1 for the confirmation run.
+# Change only with a written reason (and re-run every report that uses it).
+
+[labels]
+type = "predictive"           # only the prev_close-cutoff state labels are
+                              # ever used for strategy evaluation; descriptive
+                              # labels appear only in the report's appendix,
+                              # explicitly marked not tradable
+
+[cost]
+commission_per_share = 0.0035 # main cost only (src/rules.py MAIN_COMMISSION) -
+slippage_per_share = 0.001    # never the paper-replication cost rate here
+
+[model]
+main = "hmm"                  # primary model for all headline comparisons
+control = "kmeans"            # same selection rule, reported alongside as a
+                              # cross-check, not a second "main" result
+
+[model.state_count]
+choices = [2, 3]              # per-fold coverage selection only ever picks
+                              # from these (used for the tradability test -
+                              # see fixed_k_for_main below for aggregated
+                              # tables)
+min_state_frac = 0.15         # every state must cover >= 15% of that fold's
+                              # TRAINING days; largest qualifying k wins,
+                              # else falls back to min(choices) = 2
+decided_on = "training_window_only"
+robustness_k = 4              # k=4 (this project's BIC choice every fold in
+                              # week 6) kept only as a robustness comparison,
+                              # never the headline result
+
+# --- amended before looking at any performance number; reason: cross-fold
+# alignment. Per-fold coverage selection (above) gave k=3 in 6/8 folds for
+# both HMM and KMeans (folds 4 HMM and 5 KMeans fell back to k=2; fold 8
+# both fell back to k=2). Aggregating a metric across folds needs the same
+# state definition in every fold - "state 1 (high)" under k=2 is not the
+# same thing as "state 1 (mid)" under k=3 - so cross-fold tables can't mix
+# folds that picked different k. Fixing k=3 for every fold in the main
+# tables matches what the stated rule already produced in the majority of
+# folds, rather than overriding it.
+fixed_k_for_main = 3          # cross-fold aggregated performance tables,
+                              # significance tests and the label-shuffle
+                              # baseline all use this k in every fold
+                              # (src/models/regimes.py::fit_hmm_fold_fixed_k /
+                              # fit_kmeans_fold_fixed_k), even in fold 4
+                              # (HMM) and fold 8 (both), where the per-fold
+                              # rule above would have picked k=2. Fold 4's
+                              # small k=3 HMM state (7.4% coverage) is kept
+                              # as-is; if it doesn't have enough trades in a
+                              # given year that shows up as the
+                              # insufficient-sample flag below, not as a
+                              # reason to drop it.
+tradability_test_uses = "per_fold_coverage_selected_k"  # section 5 only:
+                              # no cross-fold alignment needed there, each
+                              # fold's own trade/no-trade decision stands on
+                              # its own
+
+[model.hmm]
+n_init = 10                   # random restarts per (fold, k); keep the
+                              # highest training log-likelihood
+covariance_type = "diag"
+
+[comparison]
+primary = "state_vs_full_sample_mean"  # per strategy, per state: does that
+                                       # state's performance differ from the
+                                       # strategy's own full-sample average?
+                                       # everything else (yearly splits, k=4,
+                                       # KMeans-vs-HMM agreement, descriptive
+                                       # labels) is exploratory, reported
+                                       # separately and never used to declare
+                                       # a state "significant"
+
+[significance]
+min_trades_per_state_per_year = 20     # a (state, year) cell with fewer
+                                       # trades than this is flagged
+                                       # insufficient-sample, not interpreted
+block_bootstrap_reps = 1000
+label_shuffle_reps = 1000              # block-shuffle the state labels this
+                                       # many times as a null/random baseline
