@@ -215,6 +215,25 @@ def test_vwap_forced_flatten_at_session_close():
     assert rec["final_exit_price"] == pytest.approx(104.0)
 
 
+def test_cumulative_vwap_matches_manual_typical_price_calc():
+    rows = [{"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 100},
+           {"open": 100.5, "high": 102.0, "low": 100.0, "close": 101.5, "volume": 200},
+           {"open": 101.5, "high": 101.5, "low": 100.5, "close": 101.0, "volume": 50}]
+    bars = _bars(DAY, rows)
+    vwap = R.cumulative_vwap(bars)
+
+    tp = [(101.0 + 99.0 + 100.5) / 3, (102.0 + 100.0 + 101.5) / 3,
+         (101.5 + 100.5 + 101.0) / 3]
+    vol = [100, 200, 50]
+    manual = []
+    cum_pv = cum_v = 0.0
+    for t, v in zip(tp, vol):
+        cum_pv += t * v
+        cum_v += v
+        manual.append(cum_pv / cum_v)
+    assert vwap == pytest.approx(manual)
+
+
 def test_vwap_cross_day_independence():
     days = pd.bdate_range("2023-06-01", periods=3)
     rows = [{"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0,

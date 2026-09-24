@@ -159,6 +159,18 @@ def _vwap_no_trade(day, reason: str) -> dict:
            "gross_pnl": np.nan, "cost": 0.0, "bps_return": 0.0}
 
 
+def cumulative_vwap(bars: pd.DataFrame) -> np.ndarray:
+    """Typical-price ((high+low+close)/3) cumulative VWAP through each bar
+    of ``bars`` (one session's 1-min RTH bars, sorted by ``ts``) - the
+    exact definition :func:`vwap_day` trades on, extracted so other code
+    (e.g. ``src.sequences``' cum_vwap_distance channel) uses the same
+    formula instead of a second, possibly-drifting copy of it."""
+    tp = (bars["high"] + bars["low"] + bars["close"]) / 3.0
+    cum_pv = (tp * bars["volume"]).cumsum()
+    cum_v = bars["volume"].cumsum()
+    return (cum_pv / cum_v.replace(0, np.nan)).to_numpy()
+
+
 def vwap_day(bars: pd.DataFrame, cfg: VWAPConfig = VWAPConfig()) -> dict:
     """One session's 1-min RTH bars -> a VWAP-trend day record.
 
@@ -171,10 +183,7 @@ def vwap_day(bars: pd.DataFrame, cfg: VWAPConfig = VWAPConfig()) -> dict:
     if len(bars) < 2:
         return _vwap_no_trade(day, "too_few_bars")
 
-    tp = (bars["high"] + bars["low"] + bars["close"]) / 3.0
-    cum_pv = (tp * bars["volume"]).cumsum()
-    cum_v = bars["volume"].cumsum()
-    vwap = (cum_pv / cum_v.replace(0, np.nan)).to_numpy()
+    vwap = cumulative_vwap(bars)
     close = bars["close"].to_numpy()
     ts = bars["ts"].to_numpy()
     opens = bars["open"].to_numpy()

@@ -1,0 +1,93 @@
+# Week 11 (phase 5, week 1) config for the minute-sequence dataset,
+# baselines, and the 1D-CNN sanity check. Fixed BEFORE building the
+# dataset or running any model - see reports/week11_dl_setup.md section 1
+# for the confirmation. Week 11 proves the pipeline on one fold; week 12
+# runs the full walk-forward. Phase 4's filter pipeline (config/
+# week08-10_*.toml) is untouched and still the phase-4 reference; phase 5
+# is a new, separate question (does a learned representation of the
+# minute bars themselves beat hand-crafted features), not a continuation
+# of the phase-4 filter that concluded "insufficient signal strength."
+
+[tasks.a]
+name = "orb_opening_range"
+description = "input: the 5 one-minute bars 09:30-09:35 (ORB's own opening range); label: ORB net R > 0 (identical label to config/week08_filter.toml [label] - same build_labels binary target, doji/invalid-session days dropped the same way)"
+sequence_length = 5
+decision_time = "09:35"
+
+[tasks.b]
+name = "intraday_continuation"
+description = "input: the first N one-minute bars from open; label: sign of the return from 09:30+N to the 16:00 close; strategy (descriptive only this week): enter at 09:30+N in the predicted direction, flatten at the close"
+n_minutes = [15, 30]
+cost_note = "the continuous return used both as the label sign source and in any descriptive Sharpe/return number is net of MAIN_COMMISSION+MAIN_SLIPPAGE per share, charged once each on entry and exit (same 2x cost_per_share convention as src/rules.py's ORB r_net)"
+
+[split]
+splitter = "src.validation.WalkForwardSplit defaults (train_years=3, test_years=1, step_years=1) - same splitter as every prior week"
+model_fit_window = "first ~2 years of the 3-year training window"
+validation_window = "last ~1 year (validation_start = test_start - 1 year) - used for CNN early stopping and any threshold, never for choosing which model design to use"
+test_window = "never touched by fitting, early stopping, or threshold selection"
+week11_scope = "one fold only (the earliest fold with enough fit+validation data) - the full walk-forward across every fold is week 12's job"
+
+[primary_comparison]
+metric = "per task (and per N for task B): CNN's test-fold AUC minus the best baseline's test-fold AUC (whichever of L2-logistic / week-9-XGBoost / week-8-hand-feature-logistic has the highest test AUC for that task)"
+test = "block bootstrap on the AUC difference, resampled in blocks of TRADING DAYS (not returns) - src.dl_eval.block_bootstrap_auc_diff (new this week, same moving-block/centered-null design as src.backtest.block_bootstrap_sharpe_diff, applied to a paired (y_true, p_cnn, p_baseline) day-indexed series instead of a paired return series)"
+block_size = 20
+n_boot = 2000
+strategy_layer = "descriptive only this week (task B's own Sharpe/return numbers, if reported at all) - not a success criterion, and inherits phase 4's power-analysis limitation: week 10 (reports/week10_robustness.md section 2, reports/stage4_chapter.md section 5) already showed the minimum detectable Sharpe difference at this sample size is far above what any of phase 4's models achieved, and nothing about switching to a learned sequence representation changes the sample size (~250 trading days/year) that limitation was about"
+
+[sequences]
+# src/sequences.py - one tensor per day, shape (n_minutes_in_window, 4
+# channels), each channel computed causally (never uses a bar at or after
+# the window's own last bar):
+channels = [
+  "log_ret_from_open: log(close_t / day_open) - day_open is the session's first 1-min bar's open, same definition as src.features's day_open",
+  "rel_volume_same_minute: volume_t / (trailing 20-trading-day mean of volume at THIS SAME minute-of-day, using only sessions strictly before the current day) - same 'same clock time, prior days only' pattern as src.features's open5m_rel_volume, generalized to every minute index 0..389",
+  "cum_range_position: (close_t - cummin(low)_{0..t}) / (cummax(high)_{0..t} - cummin(low)_{0..t}) - price's position in the day's cumulative range through bar t; 0.5 when the range is exactly 0 (a single-price open)",
+  "cum_vwap_distance: log(close_t / cum_vwap_t) - cum_vwap_t from src.rules.cumulative_vwap(bars) (amended before building the dataset: typical-price (high+low+close)/3 weighted, not close-weighted - extracted as a new public function from src/rules.py::vwap_day so this channel uses the exact same formula as week 6's VWAP-trend strategy, not a second copy of it)",
+]
+standardization = "z-score per channel, fit ONLY on each fold's model-fit-window days (mean/std over all (day, minute) cells in that window) - never the validation or test window, matching every prior week's rule"
+
+[sequences.leakage_checks]
+truncation = "src/features.py-style: truncate 1-min bars at the window's own cutoff (09:35 for task A, 09:30+N for task B) and rebuild - tensor must be identical"
+mutation = "week-8-style (tests/test_features.py::test_open_5m_features_unchanged_by_later_minute_data), extended to sequences: multiply-by-3-plus-1000 every 1-min bar at or after the cutoff - SAME DAY later bars, and ALL LATER DAYS (the rel_volume_same_minute channel reads prior days, so a bug there would only show up by also mutating later days, not just the same day) - tensor must be bit-identical"
+label_timing = "label time (task A: ORB's own exit time, >= entry at 09:35; task B: 16:00 close) must be strictly after the window's cutoff for every row - same assertion style as tests/test_features.py::test_label_time_after_every_feature_cutoff"
+
+[baselines]
+# Run to completion and finalized this week (not revisited week 12) -
+# flattened sequence (n_minutes * 4 channels -> one vector) into:
+models = [
+  "logistic_l2: sklearn LogisticRegression, L2 penalty (default), standardized (same fit-window-only scaler as the sequences themselves) - class_weight='balanced'",
+  "xgboost_conservative: src.models.filter.make_xgboost's exact week-9 fixed settings (max_depth=2, learning_rate=0.05, min_child_weight=10, n_estimators=200, subsample=0.8, colsample_bytree=0.8, scale_pos_weight computed per fold) - reused as-is, not re-tuned",
+]
+task_a_extra = "hand_feature_logistic: src.models.filter.make_logistic on config/week08_filter.toml's OPEN_FEATURE_COLUMNS (the week-8 baseline itself, reused unchanged) - task A only, since task B's decision point (09:30+N) and label don't match week 8's 09:35/net-R setup"
+report = "per task, per N (task B): each fold's AUC, and probability-decile win rate, for every baseline - same diagnostics as src.models.filter.auc/decile_calibration"
+
+[cnn]
+# src/models/cnn.py - PyTorch, CPU only, fixed hyperparameters (no grid
+# search - the whole point this week is a sanity check, not tuning).
+framework = "pytorch (CPU build, torch>=2.14+cpu)"
+determinism = "torch.manual_seed(seed) + torch.use_deterministic_algorithms(True) before every fit; per-fold seeds below"
+architecture = "Conv1d(4->16, kernel=3, padding=1) -> ReLU -> Conv1d(16->32, kernel=3, padding=1) -> ReLU -> AdaptiveAvgPool1d(1) -> Dropout(0.3) -> Linear(32->1)"
+n_params = 1809                # verified below the ~5000 budget
+task_a_note = "task A's input is only 5 timesteps; two stride-1 conv layers with padding don't shrink the sequence, but a reader should note the receptive field (5 -> 3 -> 1 effective positions of genuinely new context at kernel=3) means the network is close to a small fully-connected net on this task, not doing meaningful convolutional feature-sharing across a long sequence the way it might for task B's 15/30-step inputs"
+loss = "class-weighted BCEWithLogitsLoss - pos_weight = n_negative/n_positive of the fold's model-fit window (same convention as make_xgboost's scale_pos_weight)"
+optimizer = "Adam, lr=1e-3, no weight decay (dropout is the only regularizer)"
+batch_size = 32
+max_epochs = 100
+early_stopping = "monitor validation-window loss; patience=10 epochs, fixed before running - not tuned per fold"
+
+[cnn.multi_seed]
+# Amended before running: a single seed's init/dropout/minibatch-order
+# variance on ~500-700 training rows could plausibly be the same order of
+# magnitude as the CNN-vs-baseline AUC gap being measured, while every
+# baseline (logistic, XGBoost) is deterministic given its data - comparing
+# one CNN seed against a deterministic baseline would not be a fair fight.
+seeds = [0, 1, 2, 3, 4]
+prediction = "per fold, train all 5 seeds independently (same data, same hyperparameters, only the seed differs); the CNN's validation-window probabilities (for any threshold work) AND test-fold probabilities are the MEAN of the 5 seeds' predicted probabilities - this averaged probability is what block_bootstrap_auc_diff compares against the best baseline"
+report = "the 5 seeds' individual test-fold AUCs are also reported separately (min-max range) alongside the averaged-probability AUC, so seed variance is visible, not hidden inside the average"
+
+[cnn.sanity_checks]
+# All three run on the SAME single fold (week11_scope above) before week
+# 12's full walk-forward is attempted:
+overfit_tiny_batch = "a fixed 32-example subset of the fit window must reach >=95% training accuracy within max_epochs (no early stopping, no dropout) - confirms the model can actually learn, not just that the training loop runs"
+shuffled_label_auc = "fit on the fold's real inputs with the LABEL COLUMN SHUFFLED (features untouched) - test-fold AUC must be within [0.45, 0.55] of chance; materially above 0.5 means something is leaking (the shuffled label has by construction no real relationship to the inputs)"
+beats_or_matches_logistic = "test-fold AUC should be at least close to logistic_l2's (not necessarily higher - CNN losing to a much simpler model on ~500-700 training rows is unsurprising and not itself a red flag); a CNN AUC that WINS by a wide margin gets the overfitting/leakage check first (config completion criteria), not treated as a positive result"

@@ -8,4 +8,4 @@ matplotlib>=3.8
 pytest>=8.0
 tzdata  # IANA time zones; Windows has no system tz database
 ib_async>=2.0  # IBKR historical data download
-# torch: deferred to week 11
+torch>=2.14  # CPU build only: pip install torch --index-url https://download.pytorch.org/whl/cpu
