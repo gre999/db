@@ -29,6 +29,9 @@ from make_week01_report import (BLUE, INK_2, MUTED, ORANGE,  # noqa: E402
 from src import data_loader as dl  # noqa: E402
 from src import features as F  # noqa: E402
 from src import rules as R  # noqa: E402
+from src.models import regimes as G  # noqa: E402
+from src.validation import WalkForwardSplit  # noqa: E402
+from sklearn.preprocessing import StandardScaler  # noqa: E402
 
 REPORTS = ROOT / "reports"
 AQUA, YELLOW, MAGENTA = "#1baf7a", "#eda100", "#c23b6b"
@@ -171,6 +174,26 @@ def main() -> None:
     kmeans_k_counts = selection[selection["model"] == "kmeans"]["k"].value_counts().sort_index()
     hmm_k_counts = selection[selection["model"] == "hmm"]["k"].value_counts().sort_index()
 
+    # ---- extended BIC search (k up to 6): does it ever turn around?
+    Xstate = G.load_state_features()
+    ext_rows = []
+    for f in WalkForwardSplit().folds(Xstate.index):
+        Xtr = Xstate.iloc[f.train_idx]
+        scaler = StandardScaler().fit(Xtr.to_numpy())
+        Ztr = scaler.transform(Xtr.to_numpy())
+        for k in (2, 3, 4, 5, 6):
+            m = G.GaussianHMM(n_components=k, covariance_type="diag", n_iter=200,
+                              tol=1e-3, random_state=0)
+            m.fit(Ztr)
+            ext_rows.append({"fold": f.number, "k": k, "bic": m.bic(Ztr)})
+    ext_bic = pd.DataFrame(ext_rows).pivot(index="fold", columns="k", values="bic")
+    ext_bic_min_k = ext_bic.idxmin(axis=1)
+    n_turned_by_5 = int((ext_bic_min_k <= 5).sum())
+    n_still_falling_at_6 = int((ext_bic_min_k == 6).sum())
+    ext_bic_tbl = ext_bic.round(1).reset_index()
+    ext_bic_tbl.columns = ["fold"] + [str(c) for c in ext_bic.columns]
+    ext_bic_tbl = as_int(ext_bic_tbl, ["fold"])
+
     # ---- state characterization (descriptive features)
     data = F.MarketData.from_processed()
     desc = F.build_descriptive_matrix(data)
@@ -261,9 +284,19 @@ KMeans 用輪廓係數、HMM 用 BIC，只用每折訓練段決定，見 `src/mo
 {_md_table(sel_tbl)}
 
 KMeans 大多數折選 k=2（{int(kmeans_k_counts.get(2,0))}/8 折），少數選 k=3。HMM **全部 8 折都選了
-搜尋範圍的上限 k=4**——BIC 一路下降到邊界都還沒回頭，代表如果讓它繼續搜尋，可能還會選更多狀態；
-這裡先誠實記錄這個邊界效應，沒有隱藏，下週如果要用 HMM 狀態，值得把 k 的搜尋範圍再往上放寬一點
-確認 BIC 真的會在某處回頭。
+搜尋範圍的上限 k=4**。
+
+**把搜尋範圍放寬到 k=6 確認過，結果不是乾淨的「持續下降」**：
+
+{_md_table(ext_bic_tbl)}
+
+{n_turned_by_5}/8 折在 k=4 或 k=5 就回頭了，但 {n_still_falling_at_6}/8 折到 k=6 還在下降；
+有幾折還出現非單調（某個 k 比前一個更差，下一個 k 又變好），比較像高斯 HMM 對厚尾金融報酬
+容易陷入局部解、用增加狀態去擬合極端日，不是乾淨的「狀態越多越好」訊號。BIC 選 4 這件事本身
+不算穩健，**第七週評估各狀態下的策略績效時，不會只用 BIC 選的 k=4**：每折測試段只有約 250 天，
+分成 4 個狀態後某些狀態一年可能只剩幾十天，ORB 勝率只有 24%，樣本太少會沒辦法下結論。主分析
+改用 2 或 3 個狀態（用「可解釋、每個狀態樣本夠多」挑，不是用 BIC/輪廓係數的最優值），k=4 留著
+當穩健性對照。
 
 ## 五、各狀態特徵平均（描述型特徵，白話說明）
 
