@@ -122,6 +122,25 @@ def test_block_bootstrap_sharpe_diff():
     assert p0 == pytest.approx(1.0)
 
 
+def test_block_bootstrap_sharpe_diff_dist_matches_the_p_value_function():
+    """block_bootstrap_sharpe_diff_dist is the shared implementation behind
+    block_bootstrap_sharpe_diff - same seed must give the same observed
+    diff and a p-value recomputable from its own distribution."""
+    rng = np.random.default_rng(4)
+    n = 800
+    common = rng.normal(0, 0.01, n)
+    a = pd.Series(0.001 + common + rng.normal(0, 0.001, n))
+    b = pd.Series(common + rng.normal(0, 0.001, n))
+
+    obs, p = B.block_bootstrap_sharpe_diff(a, b, block_size=20, n_boot=300, seed=2)
+    obs2, diffs = B.block_bootstrap_sharpe_diff_dist(a, b, block_size=20, n_boot=300, seed=2)
+    assert obs2 == pytest.approx(obs)
+    assert diffs.shape == (300,)
+    centered = diffs - diffs.mean()
+    manual_p = float(np.mean(np.abs(centered) >= abs(obs)))
+    assert manual_p == pytest.approx(p)
+
+
 def test_regress_weight_diff_on_return_detects_return_timing():
     """A weight difference that's genuinely aligned with the return it earns
     (return timing) must come back with a significant positive slope close

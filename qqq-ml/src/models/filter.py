@@ -173,7 +173,8 @@ def _prep_xy(X: pd.DataFrame, orb: pd.DataFrame, cols: list[str]) -> pd.DataFram
 
 def _fit_fold(Xy: pd.DataFrame, cols: list[str], f, s: pd.DataFrame,
              X_index: pd.DatetimeIndex, retention_grid, min_trades_per_year: int,
-             model_factory: ModelFactory = make_logistic, y_col: str = "label"):
+             model_factory: ModelFactory = make_logistic, y_col: str = "label",
+             validation_years: int = 1):
     """One fold's model-fit + threshold-selection - the inner loop body
     shared by every model (:func:`fit_filter_folds_generic`,
     :func:`coefficient_table`, :func:`fold_overfitting_table`,
@@ -181,10 +182,13 @@ def _fit_fold(Xy: pd.DataFrame, cols: list[str], f, s: pd.DataFrame,
     implementation of the nested split, whatever the model. Returns
     ``None`` if the fold is skipped (too little fit/validation data), else
     ``(model, best, fit_rows, test_rows)`` where ``fit_rows``/``test_rows``
-    are ``Xy`` restricted to this fold's model-fit/test dates."""
+    are ``Xy`` restricted to this fold's model-fit/test dates.
+    ``validation_years`` (default 1, matching week 8) is a week-10
+    robustness knob - the last N years of the training window become the
+    validation window instead."""
     train_dates = X_index[f.train_idx]
     test_dates = X_index[f.test_idx]
-    validation_start = f.test_start - pd.DateOffset(years=1)
+    validation_start = f.test_start - pd.DateOffset(years=validation_years)
     fit_dates = train_dates[train_dates < validation_start]
     val_dates = train_dates[train_dates >= validation_start]
 
@@ -228,6 +232,7 @@ def fit_filter_folds_generic(X: pd.DataFrame, orb: pd.DataFrame,
                              feature_cols: list[str] | None = None,
                              retention_grid=RETENTION_GRID,
                              min_trades_per_year: int = MIN_TRADES_PER_YEAR,
+                             validation_years: int = 1,
                              splitter: WalkForwardSplit = WalkForwardSplit()
                              ) -> pd.DataFrame:
     """The full per-fold nested fit + threshold-selection procedure for any
@@ -236,7 +241,8 @@ def fit_filter_folds_generic(X: pd.DataFrame, orb: pd.DataFrame,
     2019+-only robustness extras explicitly (config/week09_filter.toml
     [subsample_2019]) to include them, restricting ``X``/``orb`` to the
     2019+ subsample first so both the with/without-extras runs share the
-    same date range."""
+    same date range. ``validation_years`` is a week-10 robustness knob
+    (config/week10_robustness.toml part 3) - default 1 matches week 8."""
     cols = list(feature_cols) if feature_cols is not None else list(OPEN_FEATURE_COLUMNS)
     Xy = _prep_xy(X, orb, cols)
     s = orb.set_index("day") if "day" in orb.columns else orb
@@ -244,7 +250,7 @@ def fit_filter_folds_generic(X: pd.DataFrame, orb: pd.DataFrame,
     rows = []
     for f in splitter.folds(X.index):
         out = _fit_fold(Xy, cols, f, s, X.index, retention_grid,
-                        min_trades_per_year, model_factory, y_col)
+                        min_trades_per_year, model_factory, y_col, validation_years)
         if out is None:
             continue
         model, best, _, test_rows = out

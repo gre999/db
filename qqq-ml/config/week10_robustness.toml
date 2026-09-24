@@ -1,0 +1,106 @@
+# Week 10 (phase 4, week 3) config for the phase-4 wrap-up: no new models
+# or features this week - power analysis, robustness checks on the
+# logistic main model, and the evidence-ladder/stage-4-chapter writeup.
+# Fixed BEFORE running any check - see reports/week10_robustness.md
+# section 1 for the confirmation. Results are reported as they come out,
+# good or bad; no item here is added or dropped based on what the results
+# turn out to be.
+
+[evidence_ladder]
+# Three layers, weakest-to-strongest claim, for every model:
+layers = [
+  "classification: AUC (pooled OOS), probability-decile win rate and mean net R (src.models.filter.auc / decile_calibration)",
+  "ranking: random-filter-null empirical p-value (src.filter_eval.random_filter_p_value)",
+  "strategy: filtered-vs-unfiltered Sharpe difference, block-bootstrap p-value, and per-fold consistency (src.filter_eval.block_bootstrap_significance / fold_breakdown)",
+]
+models = ["logistic", "random_forest", "xgboost", "xgboost_depth3", "huber",
+         "logistic_2feature"]
+logistic_2feature_note = "exploratory (config/week09_filter.toml [exploratory]) - shown in every table, labeled, never counted toward a success tally"
+success_criteria = "unchanged from config/week09_filter.toml [significance] - all four required: (1) block-bootstrap p<0.05, (2) random-filter-null p<0.05, (3) >=20 trades/year every fold, (4) >=6/9 folds better AND the aggregate difference stays positive after dropping the single most-favorable year"
+
+[power_analysis]
+# src.filter_eval.power_analysis
+block_size = 20                # matches every other block bootstrap this project runs
+n_boot = 2000
+alpha = 0.05
+power = 0.80
+z_factor = "norm.ppf(1-alpha/2) + norm.ppf(power) ~= 2.80 at the defaults above"
+se_source = "std of the block-bootstrap distribution of Sharpe(filtered) - Sharpe(unfiltered) (src.backtest.block_bootstrap_sharpe_diff_dist - same resampling src.filter_eval.block_bootstrap_significance already runs, reused rather than re-run)"
+target_diff = 0.20             # the Sharpe-difference size used for the
+                               # years-needed back-calculation
+years_needed_caveat = "assumes SE ~ 1/sqrt(n_days), the standard first-order approximation - not verified against a second block size or resample length here, so this is an order-of-magnitude estimate, not a precise sample-size design target"
+models_run_on = ["logistic", "logistic_2feature"]
+                               # the only two models worth a power read:
+                               # logistic is the pre-registered main model,
+                               # logistic_2feature has the best point
+                               # estimate of anything tried (week 9 section
+                               # 7) - if even that one is underpowered, the
+                               # general conclusion doesn't depend on which
+                               # model is examined
+
+[robustness]
+# Logistic main model only (config/week08_filter.toml's model, unchanged
+# fit/threshold-selection procedure) - never re-tuned per variant.
+scope = "logistic only - not re-run for random_forest/xgboost/huber this week"
+
+[robustness.cost_variants]
+# src.filter_eval.cost_sensitivity, reused with two new variants beyond
+# week 8's gross/main/2x-slippage set:
+variants = [
+  "2x_slippage (already in src.filter_eval.cost_sensitivity - repeated here for a complete side-by-side table)",
+  "2x_commission: src.rules.MAIN_COMMISSION*2 + src.rules.MAIN_SLIPPAGE (slippage unchanged)",
+]
+
+[robustness.validation_window]
+# src.models.filter.fit_filter_folds_generic's validation_years param
+# (added this week; default 1 matches every prior week)
+variants = [1, 2]
+description = "the last N years of each fold's 3-year training window become the validation window used for threshold selection; N=2 leaves only ~1 year for the model-fit window itself"
+
+[robustness.retention_grid_granularity]
+variants = [
+  "10% steps (src.models.filter.RETENTION_GRID, unchanged from week 8/9)",
+  "5% steps: 0.05, 0.10, ..., 1.00 (20 candidates)",
+]
+
+[robustness.random_baseline_reseed]
+description = "src.filter_eval.random_filter_p_value / random_filter_null re-run at 5 different seeds (0-4), same n_reps=1000 - checks the reported p-value isn't an artifact of one particular random draw"
+seeds = [0, 1, 2, 3, 4]
+
+[robustness.threshold_curve]
+# src.filter_eval.threshold_curve_with_random_band (new this week) -
+# fixed retention 30-100% (src.models.filter.RETENTION_GRID), the OOS
+# Sharpe the model's own already-fitted test-fold probabilities would give
+# at each retention level, with a random-filter band (5th/95th percentile
+# of src.filter_eval.random_filter_null_at_retention, n_reps=1000)
+# overlaid at every level. Run once for logistic, once for the
+# exploratory two-feature model - not a third run for the tree models
+# (out of scope this week per [robustness] scope above).
+models = ["logistic", "logistic_2feature"]
+n_reps = 1000
+
+[big_win_days]
+# Descriptive only: which kind of day the filter mostly avoids (using
+# already-computed predictive features, e.g. day-of-week/volatility-
+# regime/gap-size buckets on filtered-out vs kept days), and each model's
+# missed-big-win-day fraction (src.filter_eval.missed_big_wins) listed
+# side by side (already computed per model in week 9 - collected into one
+# table here, not recomputed differently).
+
+[year_2022]
+# Descriptive only, per the plan - week 9's finding (all three classifiers
+# independently keep 2022's losing short trades and drop its winning
+# ones) is reported as a hypothesis and future-work item, NOT patched or
+# corrected this week. Explicitly noted: the three models share the same
+# underlying feature set and largely-overlapping fit windows, so their
+# agreement is not three independent replications of the finding - it is
+# one finding observed three times on correlated inputs.
+
+[optional.vwap_filter]
+# Written here for reproducibility if picked up later; NOT run this week
+# (explicitly optional / deferred to future work per the phase-4 plan).
+description = "same pipeline as ORB's logistic filter (config/week08_filter.toml), restricted to PRE-OPEN features only (no first-5-min-bar columns - VWAP's own signal doesn't have an equivalent 'opening range' decision point at 09:35), same four success criteria as config/week09_filter.toml"
+status = "deferred_to_future_work"
+
+[optional.additional_strategies]
+status = "deferred_to_future_work"

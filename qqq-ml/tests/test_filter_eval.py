@@ -129,6 +129,25 @@ def test_threshold_curve_trade_count_increases_with_retention(orb, preds):
     assert curve["n_trades"].is_monotonic_increasing
 
 
+def test_random_filter_null_at_retention_keeps_roughly_the_requested_fraction(orb, preds):
+    fold_sizes = preds.groupby("fold").size()
+    null_30 = FE.random_filter_null_at_retention(preds, orb, 0.30, n_reps=200, seed=0)
+    null_100 = FE.random_filter_null_at_retention(preds, orb, 1.00, n_reps=5, seed=0)
+    full_unfiltered = E._daily_eval(FE.logistic_filter_series(preds, orb)["unfiltered"])["sharpe"]
+    assert len(null_30) == 200
+    # 100% retention keeps every signal day regardless of the random draw,
+    # so every repetition must reproduce the unfiltered Sharpe exactly
+    assert np.allclose(null_100, full_unfiltered)
+
+
+def test_threshold_curve_with_random_band_matches_threshold_curve_sharpe(orb, preds):
+    out = FE.threshold_curve_with_random_band(preds, orb, n_reps=100, seed=1)
+    curve = FE.threshold_curve(preds, orb)
+    assert list(out["retention"]) == list(curve["retention"])
+    assert np.allclose(out["sharpe"].to_numpy(), curve["sharpe"].to_numpy())
+    assert (out["random_p05"] <= out["random_p95"]).all()
+
+
 # ------------------------------------------------------------ missed big wins
 def test_missed_big_wins_counts_correctly():
     orb = _make_orb(seed=5)
@@ -170,6 +189,41 @@ def test_block_bootstrap_significance_detects_a_planted_large_effect():
     out = FE.block_bootstrap_significance(preds_strong, orb_strong, n_boot=300)
     assert out["observed_sharpe_diff"] > 0
     assert out["p_value"] < 0.05
+
+
+def test_power_analysis_detects_a_planted_large_effect_but_not_a_small_sample(orb, preds):
+    """Reuses the week-8-scale small fixture (orb/preds fixtures) - the
+    observed diff there should be well under the minimum detectable
+    effect, matching that Sharpe difference not being significant."""
+    out = FE.power_analysis(preds, orb, n_boot=300, seed=0)
+    assert out["se"] > 0
+    assert out["mde"] == pytest.approx(out["z_factor"] * out["se"])
+    assert out["detectable"] == (abs(out["observed_diff"]) >= out["mde"])
+    assert out["years_needed_for_target"] > out["n_years"] or not out["detectable"]
+
+
+def test_power_analysis_years_needed_scales_with_se_squared(orb, preds):
+    out = FE.power_analysis(preds, orb, n_boot=300, seed=0, target_diff=0.20)
+    se_target = out["target_diff"] / out["z_factor"]
+    manual_years = out["n_years"] * (out["se"] / se_target) ** 2
+    assert out["years_needed_for_target"] == pytest.approx(manual_years)
+
+
+def test_power_analysis_large_effect_is_detectable():
+    days = pd.bdate_range("2015-01-01", "2022-12-31")
+    rng = np.random.default_rng(11)
+    doji = rng.random(len(days)) < 0.15
+    good = rng.normal(0, 1, len(days)) > 0
+    r_net = np.where(good, rng.normal(4.0, 0.3, len(days)), rng.normal(-4.0, 0.3, len(days)))
+    bps_return = np.where(doji, 0.0, r_net * 20.0)
+    orb_strong = pd.DataFrame({"day": days, "traded": ~doji,
+                              "r_net": np.where(doji, np.nan, r_net),
+                              "bps_return": bps_return}).set_index("day")
+    signal_days = orb_strong.index[orb_strong["traded"]]
+    preds_strong = pd.DataFrame({"date": signal_days, "fold": 1,
+                                "keep": good[orb_strong["traded"].to_numpy()]})
+    out = FE.power_analysis(preds_strong, orb_strong, n_boot=300)
+    assert out["detectable"]
 
 
 def test_random_filter_p_value_matches_manual_rank(orb, preds):

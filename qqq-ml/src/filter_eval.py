@@ -165,6 +165,52 @@ def threshold_curve(preds: pd.DataFrame, orb: pd.DataFrame,
     return pd.DataFrame(rows)
 
 
+def random_filter_null_at_retention(preds: pd.DataFrame, orb: pd.DataFrame,
+                                    retention: float, n_reps: int = 1000,
+                                    seed: int = 0) -> np.ndarray:
+    """Like :func:`random_filter_null`, but at a FIXED retention level
+    (fraction of each fold's signal days) instead of the count each fold's
+    threshold rule actually kept - week 10's finalized threshold curve
+    (config/week10_robustness.toml part 3) overlays this band at every
+    retention level, not just the one the model happened to choose."""
+    base = logistic_filter_series(preds, orb)["unfiltered"]
+    rng = np.random.default_rng(seed)
+    fold_dates = {f: g["date"].to_numpy() for f, g in preds.groupby("fold")}
+
+    sharpes = np.empty(n_reps)
+    for i in range(n_reps):
+        filtered = base.copy()
+        for f, dates in fold_dates.items():
+            n_keep = int(round(len(dates) * retention))
+            n_keep = max(0, min(n_keep, len(dates)))
+            keep = rng.choice(dates, size=n_keep, replace=False) if n_keep else np.array([])
+            drop = np.setdiff1d(dates, keep)
+            filtered.loc[pd.DatetimeIndex(drop)] = 0.0
+        sharpes[i] = E._daily_eval(filtered)["sharpe"]
+    return sharpes
+
+
+def threshold_curve_with_random_band(preds: pd.DataFrame, orb: pd.DataFrame,
+                                     retention_grid=FL.RETENTION_GRID,
+                                     n_reps: int = 1000, seed: int = 0
+                                     ) -> pd.DataFrame:
+    """:func:`threshold_curve` (the model's own OOS Sharpe at each
+    retention level) with a random-filter band (5th/95th percentile of
+    :func:`random_filter_null_at_retention`) overlaid at every retention
+    level - the finalized threshold-curve figure for week 10, run once for
+    logistic and once for the exploratory two-feature model."""
+    curve = threshold_curve(preds, orb, retention_grid)
+    rows = []
+    for _, row in curve.iterrows():
+        null = random_filter_null_at_retention(preds, orb, row["retention"],
+                                               n_reps=n_reps, seed=seed)
+        rows.append({"retention": row["retention"], "sharpe": row["sharpe"],
+                    "random_p05": float(np.percentile(null, 5)),
+                    "random_p95": float(np.percentile(null, 95)),
+                    "random_mean": float(null.mean())})
+    return pd.DataFrame(rows)
+
+
 def missed_big_wins(preds: pd.DataFrame, orb: pd.DataFrame,
                     r_threshold: float = 5.0) -> dict:
     """Of ORB's own big-win days (r_net >= r_threshold) inside the filter's
@@ -199,6 +245,43 @@ def block_bootstrap_significance(preds: pd.DataFrame, orb: pd.DataFrame,
         block_size=block_size, n_boot=n_boot, seed=seed)
     return {"observed_sharpe_diff": obs, "p_value": p, "block_size": block_size,
            "n_boot": n_boot}
+
+
+def power_analysis(preds: pd.DataFrame, orb: pd.DataFrame,
+                   block_size: int = 20, n_boot: int = 2000, seed: int = 0,
+                   alpha: float = 0.05, power: float = 0.80,
+                   target_diff: float = 0.20) -> dict:
+    """Week 10 (config/week10_robustness.toml part 2): how big would the
+    filtered-vs-unfiltered Sharpe difference need to be for this sample
+    size to reliably detect it, and how many years of data would
+    ``target_diff`` need to become detectable.
+
+    Standard error: std of the block-bootstrap distribution of Sharpe(a) -
+    Sharpe(b) (:func:`src.backtest.block_bootstrap_sharpe_diff_dist`, the
+    same resampling as :func:`block_bootstrap_significance` - this reuses
+    its bootstrap draws rather than the p-value it computes from them).
+    Minimum detectable effect (two-sided, at ``alpha``/``power``):
+    ``(z_(1-alpha/2) + z_power) * se`` (~2.8x SE at the default 5%/80%).
+    Years-needed back-calculation assumes SE ~ 1/sqrt(n_days) (the usual
+    first-order approximation - not verified against a second block size
+    or a resampled series length here, so treat it as an order-of-
+    magnitude estimate, not a precise design target)."""
+    from scipy import stats
+    series = logistic_filter_series(preds, orb)
+    obs, diffs = BT.block_bootstrap_sharpe_diff_dist(
+        series["filtered"] / 1e4, series["unfiltered"] / 1e4,
+        block_size=block_size, n_boot=n_boot, seed=seed)
+    se = float(diffs.std(ddof=1))
+    z = stats.norm.ppf(1 - alpha / 2) + stats.norm.ppf(power)
+    mde = z * se
+    n_days = len(series["unfiltered"])
+    n_years = n_days / 252.0
+    se_target = target_diff / z
+    years_needed = n_years * (se / se_target) ** 2 if se_target > 0 else np.inf
+    return {"observed_diff": obs, "se": se, "z_factor": z, "mde": mde,
+           "n_days": n_days, "n_years": n_years, "target_diff": target_diff,
+           "years_needed_for_target": years_needed,
+           "detectable": bool(abs(obs) >= mde)}
 
 
 def random_filter_p_value(preds: pd.DataFrame, orb: pd.DataFrame,

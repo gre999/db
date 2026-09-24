@@ -194,6 +194,37 @@ def evaluate(bt: pd.DataFrame, vol_target: float = 0.15) -> pd.Series:
     })
 
 
+def _sharpe(col: np.ndarray) -> float:
+    s = col.std(ddof=0)
+    return float(col.mean() / s * np.sqrt(S.TRADING_DAYS)) if s > 0 else np.nan
+
+
+def block_bootstrap_sharpe_diff_dist(ret_a: pd.Series, ret_b: pd.Series,
+                                     block_size: int = 20, n_boot: int = 2000,
+                                     seed: int = 0) -> tuple[float, np.ndarray]:
+    """Observed Sharpe(a)-Sharpe(b) and the raw (uncentered) moving-block-
+    bootstrap distribution of that difference - the shared implementation
+    behind :func:`block_bootstrap_sharpe_diff` (p-value) and callers that
+    need the distribution itself (e.g. its standard error, for a power
+    analysis). See :func:`block_bootstrap_sharpe_diff` for the resampling
+    method."""
+    a, b = ret_a.align(ret_b, join="inner")
+    x = np.column_stack([a.to_numpy(), b.to_numpy()])
+    n = len(x)
+
+    obs = _sharpe(x[:, 0]) - _sharpe(x[:, 1])
+    rng = np.random.default_rng(seed)
+    n_blocks = int(np.ceil(n / block_size))
+    starts = np.arange(n - block_size + 1)
+    diffs = np.empty(n_boot)
+    for i in range(n_boot):
+        idx = np.concatenate([np.arange(s, s + block_size)
+                              for s in rng.choice(starts, n_blocks)])[:n]
+        rs = x[idx]
+        diffs[i] = _sharpe(rs[:, 0]) - _sharpe(rs[:, 1])
+    return float(obs), diffs
+
+
 def block_bootstrap_sharpe_diff(ret_a: pd.Series, ret_b: pd.Series,
                                 block_size: int = 20, n_boot: int = 2000,
                                 seed: int = 0) -> tuple[float, float]:
@@ -206,24 +237,7 @@ def block_bootstrap_sharpe_diff(ret_a: pd.Series, ret_b: pd.Series,
     the share of centered bootstrap diffs at least as far from 0 as the
     observed diff.
     """
-    a, b = ret_a.align(ret_b, join="inner")
-    x = np.column_stack([a.to_numpy(), b.to_numpy()])
-    n = len(x)
-
-    def sharpe(col: np.ndarray) -> float:
-        s = col.std(ddof=0)
-        return float(col.mean() / s * np.sqrt(S.TRADING_DAYS)) if s > 0 else np.nan
-
-    obs = sharpe(x[:, 0]) - sharpe(x[:, 1])
-    rng = np.random.default_rng(seed)
-    n_blocks = int(np.ceil(n / block_size))
-    starts = np.arange(n - block_size + 1)
-    diffs = np.empty(n_boot)
-    for i in range(n_boot):
-        idx = np.concatenate([np.arange(s, s + block_size)
-                              for s in rng.choice(starts, n_blocks)])[:n]
-        rs = x[idx]
-        diffs[i] = sharpe(rs[:, 0]) - sharpe(rs[:, 1])
+    obs, diffs = block_bootstrap_sharpe_diff_dist(ret_a, ret_b, block_size, n_boot, seed)
     centered = diffs - diffs.mean()
     p = float(np.mean(np.abs(centered) >= abs(obs)))
     return float(obs), p

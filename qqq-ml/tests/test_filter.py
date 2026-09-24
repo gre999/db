@@ -81,6 +81,23 @@ def test_fit_filter_folds_output_shape_and_keep_matches_threshold(data):
     assert preds["retention_selected"].isin(FL.RETENTION_GRID).all()
 
 
+def test_validation_years_changes_the_split_without_breaking_output(data):
+    """Week 10 robustness knob: a 2-year validation window should still
+    produce a well-formed predictions frame, with a smaller model-fit
+    window per fold (so somewhat different, but still valid, choices)."""
+    X, orb = data
+    preds_1y = FL.fit_filter_folds(X, orb)
+    preds_2y = FL.fit_filter_folds_generic(X, orb, FL.make_logistic, "logistic",
+                                           validation_years=2)
+    assert not preds_2y.empty
+    assert preds_2y["retention_selected"].isin(FL.RETENTION_GRID).all()
+    for _, row in preds_2y.iterrows():
+        assert row["keep"] == (row["y_pred_proba"] >= row["threshold"])
+    # 2-year validation leaves less fit data, so at least as many folds get
+    # skipped (never more test-fold coverage than the 1-year version)
+    assert set(preds_2y["fold"]) <= set(preds_1y["fold"])
+
+
 def test_fit_filter_folds_never_uses_test_fold_for_threshold_or_fit(data):
     """Perturb the LAST fold's own test-window features/labels and confirm
     that fold's chosen threshold/retention is unchanged - the model fit and
