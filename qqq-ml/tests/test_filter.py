@@ -150,3 +150,101 @@ def test_auc_and_calibration_detect_the_planted_signal(data):
     assert cal["win_rate"].iloc[-1] > cal["win_rate"].iloc[0]
     assert cal["mean_r_net"].iloc[-1] > cal["mean_r_net"].iloc[0]
     assert cal["n"].sum() == len(preds)
+
+
+# ------------------------------------------------------- week 9: tree models
+@pytest.mark.parametrize("model_key", ["random_forest", "xgboost", "xgboost_depth3"])
+def test_tree_models_detect_the_planted_signal(data, model_key):
+    X, orb = data
+    factory, y_col = FL.MODEL_FACTORIES[model_key]
+    preds = FL.fit_filter_folds_generic(X, orb, factory, model_key, y_col=y_col)
+    assert not preds.empty
+    assert (preds["model"] == model_key).all()
+    a = FL.auc(preds)
+    assert a > 0.55, a
+
+
+def test_huber_regression_baseline_ranks_by_predicted_r_net(data):
+    X, orb = data
+    factory, y_col = FL.MODEL_FACTORIES["huber"]
+    assert y_col == "r_net"
+    preds = FL.fit_filter_folds_generic(X, orb, factory, "huber", y_col=y_col)
+    assert not preds.empty
+    # kept days should have a higher win rate than dropped days if the
+    # regression's ranking carries the planted signal at all
+    kept_win_rate = preds.loc[preds["keep"], "y_true"].mean()
+    dropped = preds.loc[~preds["keep"], "y_true"]
+    if len(dropped):
+        assert kept_win_rate >= dropped.mean()
+
+
+def test_random_forest_scale_pos_weight_not_applicable_but_class_weight_set():
+    model = FL.make_random_forest()
+    assert model.class_weight == "balanced"
+    assert model.max_depth == 4
+    assert model.min_samples_leaf == 20
+
+
+def test_xgboost_scale_pos_weight_computed_from_y():
+    y_imbalanced = pd.Series([1] * 20 + [0] * 80)   # 20 pos, 80 neg
+    model = FL.make_xgboost(y_imbalanced)
+    assert model.scale_pos_weight == pytest.approx(80 / 20)
+    assert model.max_depth == 2       # main-analysis depth, not the appendix one
+
+
+def test_xgboost_depth3_factory_overrides_depth_only():
+    model = FL.MODEL_FACTORIES["xgboost_depth3"][0](None)
+    assert model.max_depth == 3
+    assert model.learning_rate == 0.05
+
+
+def test_tree_model_never_uses_test_fold_for_threshold_or_fit(data):
+    """Same causality check as test_fit_filter_folds_never_uses_test_fold_
+    for_threshold_or_fit, generalized: _fit_fold is shared code, but this
+    confirms it actually generalizes rather than assuming it - perturb the
+    last fold's test data and require XGBoost's chosen threshold/retention
+    for that fold is unchanged."""
+    X, orb = data
+    factory, y_col = FL.MODEL_FACTORIES["xgboost"]
+    folds = WalkForwardSplit().folds(X.index)
+    last = folds[-1]
+    test_dates = X.index[last.test_idx]
+
+    before = FL.fit_filter_folds_generic(X, orb, factory, "xgboost", y_col=y_col)
+    before_choice = before[before["fold"] == last.number][
+        ["threshold", "retention_selected"]].iloc[0]
+
+    X2 = X.copy()
+    X2.loc[test_dates, list(OPEN_FEATURE_COLUMNS)] += 1000.0
+    orb2 = orb.copy()
+    orb2.loc[test_dates, "bps_return"] = 999.0
+    orb2.loc[test_dates, "r_net"] = 999.0
+
+    after = FL.fit_filter_folds_generic(X2, orb2, factory, "xgboost", y_col=y_col)
+    after_choice = after[after["fold"] == last.number][
+        ["threshold", "retention_selected"]].iloc[0]
+
+    assert before_choice["threshold"] == pytest.approx(after_choice["threshold"])
+    assert before_choice["retention_selected"] == after_choice["retention_selected"]
+
+
+def test_fold_overfitting_table_reports_fit_and_test_auc(data):
+    X, orb = data
+    out = FL.fold_overfitting_table(X, orb, FL.make_logistic, "logistic")
+    assert not out.empty
+    assert {"fold", "model", "fit_auc", "test_auc"} <= set(out.columns)
+    assert out["fit_auc"].between(0, 1).all()
+    assert out["test_auc"].between(0, 1).all()
+    # the planted signal is genuinely linear/simple, so fit and test AUC
+    # shouldn't be wildly different for logistic on this synthetic fixture
+    assert (out["fit_auc"] - out["test_auc"]).abs().median() < 0.25
+
+
+def test_permutation_importance_table_ranks_the_planted_signal_highest(data):
+    X, orb = data
+    out = FL.permutation_importance_table(X, orb, FL.make_logistic, "logistic",
+                                          n_repeats=5)
+    assert not out.empty
+    assert set(OPEN_FEATURE_COLUMNS) <= set(out.columns)
+    mean_importance = out[list(OPEN_FEATURE_COLUMNS)].mean()
+    assert mean_importance.idxmax() == "open5m_body_ratio"

@@ -1,0 +1,172 @@
+# Week 9 (phase 4, week 2) config for the tree-model trade-day filters
+# (random forest, XGBoost) + a secondary continuous-R regression baseline.
+# Fixed BEFORE running any model - see reports/week09_filter_trees.md
+# section 1 for the confirmation. Any change is written into this file
+# with a reason (same convention as config/week07_regime_eval.toml,
+# config/week08_filter.toml).
+
+[inherited_from_week08]
+# Everything not restated below is unchanged from config/week08_filter.toml:
+# base strategy (ORB, main cost, unit exposure), decision time (open_5m,
+# 09:35), feature set (OPEN_FEATURE_COLUMNS - the full-sample HAR log-RV
+# features, NOT the 2019+-only har_resid_xgb_pred_var/hmm_state/
+# hmm_state_prob - those stay a 2019+-subsample robustness comparison,
+# see [subsample_2019] below), label (r_net>0 binary + continuous r_net,
+# doji AND invalid-session days dropped from the modeling set - i.e. every
+# traded==False row, not just reason=="doji" literally), the outer nested
+# split (model-fit window = train_start..validation_start ~2y,
+# validation window = validation_start..test_start ~1y,
+# validation_start = test_start - 1 year), retention_grid (8-point grid,
+# 30%-100% in 10% steps), and "never refit against the test fold" (the
+# model fit on the model-fit window is the exact model scored on both the
+# validation window and the test fold).
+carries_over = true
+
+[tree_models.random_forest]
+# Small per-fold sample (~500-700 fit-window rows), fixed in advance - no
+# grid search, unlike src/models/trees.py's RV-forecasting trees (which do
+# tune per fold on a validation block; here the validation block is
+# already spoken for by threshold selection, so there is no second
+# validation block left to tune hyperparameters against without a further
+# nested split this project has decided isn't worth the added complexity
+# for a first pass).
+max_depth = 4
+min_samples_leaf = 20
+class_weight = "balanced"
+n_estimators = 300             # matches src/models/trees.py's RFModel
+                               # convention; not tuned
+random_state = 0
+# max_features left at sklearn's default ("sqrt") - not specified in the
+# plan, fixed here rather than left implicit so it can't silently drift.
+max_features = "sqrt"
+
+[tree_models.xgboost]
+# max_depth: plan said "2-3"; amended to 2 (was drafted at 3, changed
+# before running) - reason: logistic's stable coefficients (src.models.
+# filter.coefficient_table, week 8) are two monotone main effects
+# (open5m_body_ratio, har_logrv_1d), and depth 2 already lets a tree
+# express a two-way interaction between them; the fit window is small
+# (~500-700 rows/fold) and overfitting risk outweighs underfitting risk
+# here. Depth 3 is kept as a descriptive-only appendix comparison, not a
+# second success-criteria run.
+max_depth = 2                  # main-analysis depth
+max_depth_appendix = 3         # descriptive-only comparison, not a second
+                               # success-criteria run
+learning_rate = 0.05
+min_child_weight = 10          # amended from 20 (mirroring random_forest's
+                               # min_samples_leaf) to 10 - see fitting
+                               # method below
+scale_pos_weight = "n_negative / n_positive, computed per fold from the model-fit window (the full ~2-year window - no early-stopping carve-out, see below)"
+n_estimators = 200             # fixed count, not an early-stopping upper bound
+subsample = 0.8                # fixed, matches src/models/trees.py's XGBModel; not tuned
+colsample_bytree = 0.8
+objective = "binary:logistic"
+eval_metric = "logloss"
+tree_method = "hist"
+random_state = 0
+
+[tree_models.xgboost.fitting_method]
+# Amended before running (early stopping + a third nested split was the
+# original draft): dropped in favor of a fixed n_estimators=200, trained
+# on the FULL model-fit window (~2 years), no early-stopping carve-out.
+# Reason: the model-fit window's last 6 months would have held only ~30
+# winning trades to early-stop against - too noisy a signal to pick a
+# boosting-round count from - and carving it out would have cost a
+# quarter of the already-small training data for no reliable benefit.
+# Same "fit once on the model-fit window, deploy unchanged to validation
+# and test" rule as random_forest and logistic - no third split level.
+description = "fixed n_estimators=200 on the full ~2-year model-fit window; no early stopping, no additional inner split"
+
+[regression_baseline]
+# Secondary / exploratory-adjacent, not part of the 4-criterion success
+# family (see [significance] below) - predicts continuous r_net instead of
+# the binary label, Huber loss (robust to the R-multiple outliers Part 2
+# of week 8 already documented - the return-concentration finding).
+model = "sklearn.linear_model.HuberRegressor"
+standardize = "in_pipeline_fit_train_window_only"   # same as every other model
+hyperparameters = "sklearn defaults (epsilon=1.35, alpha=1e-4) - not tuned"
+threshold_selection = "identical nested split/retention-grid/no-refit rule as the classifiers, using the predicted r_net value in place of predicted probability as the ranking score"
+diagnostics = "Sharpe/max-drawdown/trades-per-year/yearly-and-fold breakdown only - AUC and probability-decile calibration don't apply to a continuous-output regressor and are skipped for this model"
+
+[significance]
+# Stricter than week 8's three criteria (which only compared point
+# estimates - see reports/week08_filter_baseline.md section 5-6). ALL FOUR
+# must hold for a model to count as a successful improvement over not
+# filtering:
+success_requires_all_of = [
+  "1. block-bootstrap p < 0.05 for filtered-vs-unfiltered Sharpe difference (src.filter_eval.block_bootstrap_significance, same block_size=20/n_boot=2000 as week 8)",
+  "2. random-filter-null empirical p < 0.05 (src.filter_eval.random_filter_p_value, same n_reps=1000/method as week 8)",
+  "3. every test fold has >= 20 trades/year (src.filter_eval.evaluate_success's existing check - each fold's test window is already ~1 calendar year by construction of WalkForwardSplit, so this is equivalent to a per-fold-per-year check)",
+  "4. at least 6/9 folds have filtered Sharpe > unfiltered Sharpe (src.filter_eval.fold_breakdown), AND the aggregate filtered-vs-unfiltered Sharpe difference stays positive after dropping the single calendar year with the largest POSITIVE (filtered - unfiltered) contribution (src.filter_eval.yearly_breakdown identifies that year; the OOS window is then rebuilt excluding it and Sharpe recomputed on the reduced window) - directly targets week 8's finding that the pooled improvement was propped up by one outlier year (2026)",
+]
+
+[significance.primary_comparison]
+# "Primary" = random forest vs unfiltered, and XGBoost vs unfiltered (2
+# comparisons) - criterion 1's two block-bootstrap p-values, Holm-Bonferroni
+# corrected as a family of 2 (sorted p(1)<=p(2): reject p(1) if p(1) <
+# 0.05/2; if rejected, reject p(2) if p(2) < 0.05/1). The Holm-adjusted
+# p-value is what's checked against 0.05 for criterion 1 for these two
+# models specifically. Logistic (week 8) and the Huber regression baseline
+# are reported for reference but are NOT part of this Holm family - adding
+# them would be testing a family decided after seeing week 8's result,
+# which is exactly the kind of post-hoc expansion this project's
+# significance tests are meant to guard against. All four criteria are
+# still evaluated (unadjusted) for logistic and the regression baseline,
+# for the report's completion-criteria answer ("which model, if any,
+# achieves significant improvement").
+models = ["random_forest", "xgboost"]
+correction = "holm"
+# rationale for excluding logistic and the Huber regression baseline from
+# this Holm family: logistic is week 8's pre-registered baseline, already
+# run and reported on its own terms before this config existed - it isn't
+# a new test being introduced now, so it doesn't belong in a family of
+# tests decided this week. The regression baseline is secondary analysis
+# (see [regression_baseline]), not a primary comparison. Both still get
+# all four success criteria evaluated unadjusted, for the report's
+# completion-criteria answer.
+
+[diagnostics.overfitting_check]
+# Per fold, per classifier (logistic, random forest, XGBoost): AUC on the
+# model-fit window (in-sample) vs AUC on the test fold (OOS). A tree model
+# that looks clearly better than logistic on point estimates gets checked
+# here FIRST, before any other interpretation - a large fit-vs-test AUC
+# gap is the signal to distrust that model's apparent edge.
+metric = "roc_auc"
+
+[diagnostics.permutation_importance]
+# Test-fold permutation importance (sklearn.inspection.permutation_
+# importance), computed for the three classifiers (logistic, random
+# forest, XGBoost) on their own deployed per-fold model against that
+# fold's test-fold labels, scoring="roc_auc". Reported against week 8's
+# already-computed standardized logistic coefficients (src.models.filter.
+# coefficient_table) as a cross-check, not a replacement - permutation
+# importance is a post-hoc diagnostic, never used to select or filter
+# features. Not computed for the Huber regression baseline (secondary).
+scoring = "roc_auc"
+n_repeats = 20
+random_state = 0
+
+[diagnostics.year_2022]
+# Split ORB's own 2022 trades by direction (src.rules's ORB "direction"
+# column, +1/-1), compare filtered-vs-unfiltered win rate / mean net R /
+# retention rate PER DIRECTION, for all three classifiers (logistic,
+# random forest, XGBoost) - distinguishes "the filter is systematically
+# wrong about one direction that year" from "that fold's selected
+# threshold/retention was just poorly calibrated for 2022 specifically,
+# unrelated to direction".
+
+[subsample_2019]
+# Deferred from week 8 (config/week08_filter.toml [features]
+# robustness_2019_subsample): on the 2019-01-02+ subsample only, compare
+# logistic AND whichever tree model performs best in the main analysis,
+# with vs without har_resid_xgb_pred_var / hmm_state / hmm_state_prob
+# added to the feature set - both versions run on the exact same
+# subsample, isolating the two extras' marginal value from the sample-
+# period difference.
+
+[exploratory]
+# Not part of the success-criteria family in any form (post-hoc, selected
+# after looking at week 8's coefficient table - reports/
+# week08_filter_baseline.md section 3/7):
+two_feature_logistic = ["open5m_body_ratio", "har_logrv_1d"]
+labeled_as = "exploratory only, reported separately from every success-criteria comparison"
