@@ -284,6 +284,51 @@ block bootstrap p = {p_rf:.4f}。
     smooth_tbl = pd.DataFrame(smooth_rows)
     smooth_tbl["window"] = smooth_tbl["window"].astype(str)
 
+    # ---- overnight diagnostic: does predicting rv_on natively close the gap?
+    t_all = pd.read_parquet(ROOT / "data" / "processed" / "targets_daily.parquet")
+    t_all = t_all[t_all["valid"].astype(bool)]
+    on_share = (t_all["overnight"] ** 2) / t_all["rv_on"]
+    on_share_yearly = on_share.groupby(t_all.index.year).mean()
+    on_share_monthly = on_share.groupby([t_all.index.year, t_all.index.month]).mean()
+
+    har_on = load_predictions("har_baselines")
+    har_on = har_on[(har_on["model"] == "har") &
+                    (har_on["target"] == "rv_on")].set_index("date").sort_index()
+    resid_on = load_predictions("week5_har_resid_xgb_rvon")
+    resid_on = resid_on[(resid_on["model"] == "har_resid_xgb") &
+                        (resid_on["target"] == "rv_on")
+                        ].set_index("date").sort_index()
+    idx_on = har_on.index.intersection(resid_on.index).intersection(
+        inputs["common_index"])
+
+    on_rows = []
+    for name, p in [("har_rvon", har_on), ("har_resid_xgb_rvon", resid_on)]:
+        var_cc_on = p["y_pred_var"].reindex(idx_on)
+        w_on = S.vol_target_weight(var_cc_on, cfg.vol_target, cfg.leverage_cap)
+        bt_on = B.run_backtest(w_on, inputs["daily"], timing=cfg.timing,
+                               cost_bps=cfg.cost_bps, band=cfg.band)
+        bts[name] = bt_on
+        ev_on = B.evaluate(bt_on, cfg.vol_target)
+        rv_on_actual = inputs["rv_on"].reindex(idx_on)
+        ok = var_cc_on.notna() & rv_on_actual.notna() & \
+            (var_cc_on > 0) & (rv_on_actual > 0)
+        qlike_on = M.qlike(rv_on_actual[ok], var_cc_on[ok])
+        _, p_vs_hist20_on = B.block_bootstrap_sharpe_diff(
+            bt_on["net_return"], bts["hist20"]["net_return"].reindex(idx_on),
+            block_size=20, n_boot=3000, seed=0)
+        _, p_vs_rv_target = B.block_bootstrap_sharpe_diff(
+            bt_on["net_return"], bts["har_resid_xgb"]["net_return"].reindex(idx_on),
+            block_size=20, n_boot=3000, seed=0)
+        on_rows.append({"source": name, "QLIKE": round(qlike_on, 4),
+                       "sharpe": round(ev_on["sharpe"], 4),
+                       "max_drawdown": round(ev_on["max_drawdown"], 4),
+                       "avg_turnover": round(ev_on["avg_turnover"], 4),
+                       "p vs hist20": round(p_vs_hist20_on, 4),
+                       "p vs rv-target": round(p_vs_rv_target, 4)})
+    on_tbl = pd.DataFrame(on_rows)
+    qlike_har_rv = two_layer.loc[LABEL["har"], "QLIKE"]
+    qlike_resid_rv = two_layer.loc[LABEL["har_resid_xgb"], "QLIKE"]
+
     figs = {"eq": fig_equity_drawdown(bts, SOURCES),
             "track": fig_tracking(bts, SOURCES, cfg.vol_target)}
 
@@ -424,6 +469,31 @@ HAR+殘差XGB 在 9 組裡有 {n_beats_har}/9 贏過 HAR、{n_beats_hist20}/9 �
 換手率降得更低，但 QLIKE 變差、夏普不升反降（40 天版本連 HAR 都輸）。**結論：20 日歷史波動贏
 不是因為反應速度，是因為它含有 HAR／HAR+殘差XGB 沒抓到的資訊**——單純放慢 HAR 系列的反應速度
 無法複製這個優勢。
+
+## 十一、隔夜資訊診斷：換成含隔夜的目標會不會追上？
+
+假說：日內 RV 目標漏掉隔夜跳空，靠一個每折固定的尺度係數（`scale_ratios`）補回收盤到收盤，
+但隔夜變異數佔比逐月變動很大（{on_share_monthly.min():.1%}–{on_share_monthly.max():.1%}，
+標準差 {on_share_monthly.std():.1%}，逐年均值從 2014–2018 年的約
+{on_share_yearly.loc[2014:2018].mean():.1%} 緩升到 2025–2026 年的約
+{on_share_yearly.loc[2025:2026].mean():.1%}），固定係數補不到這個變動，這正是 20 日歷史波動
+（直接量收盤到收盤）有、HAR 系列沒有的資訊。檢查方法：把 HAR 與 HAR+殘差XGB 都換成
+`rv_on`（日內 RV + 隔夜報酬平方，Week 2 已經做好）目標直接訓練，不用尺度係數，看夏普有沒有
+追上 20 日歷史波動。
+
+{_md_table(on_tbl)}
+
+**沒有追上，反而更差**：`har_resid_xgb_rvon` 對 20 日歷史波動 p = {on_tbl.iloc[1]['p vs hist20']}
+（仍然顯著更差），對原本的 rv 目標 + 尺度係數版本 p = {on_tbl.iloc[1]['p vs rv-target']}
+——這次不是打平，是**顯著更差**（夏普 {on_tbl.iloc[1]['sharpe']} 對 {ev_base['sharpe']:.4f}）。
+QLIKE 同樣變差：直接預測 `rv_on` 的 QLIKE（HAR {on_tbl.iloc[0]['QLIKE']}、HAR+殘差XGB
+{on_tbl.iloc[1]['QLIKE']}）都比原本「預測 `rv`、乘上固定係數」的版本（HAR {qlike_har_rv}、
+HAR+殘差XGB {qlike_resid_rv}）差。**假說沒有得到支持**：固定尺度係數雖然無法反映隔夜佔比的
+月度變動，但直接對雜訊遠大於日內 RV 的隔夜變異數建模，引入的預測雜訊比省下的那點偏誤更傷——
+隔夜報酬平方是單一一根「跳空」，比累積一整天的已實現變異數雜訊大得多，HAR 的三個落後項對它的
+解釋力明顯更差。這不代表隔夜資訊不重要（20 日歷史波動本身就贏），只代表「整個目標換成
+`rv_on`」不是納入這個資訊的好方法；比較有希望的方向仍是把「過去 20 日收盤到收盤變異數」當成
+一個新特徵加進去，而不是換掉目標本身。
 """
     out_path = REPORTS / "week05_position.md"
     out_path.write_text(md, encoding="utf-8")
