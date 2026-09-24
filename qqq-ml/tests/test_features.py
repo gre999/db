@@ -170,6 +170,30 @@ def test_volume_close_loc_dow(data, full):
     assert X.loc[d, "day_of_week"] == d.dayofweek
 
 
+def test_descriptive_matrix_is_same_day_not_lagged(data, full):
+    """build_descriptive_matrix intentionally does NOT respect any cutoff -
+    it describes day t with day t's own values, the opposite of the
+    predictive (prev_close-cutoff) columns. Locking that in here so nobody
+    "fixes" it into a lag by mistake."""
+    desc = F.build_descriptive_matrix(data)
+    pred = full["prev_close"]
+    ctx = F.FeatureContext(data)
+    i = 200
+    d, d_next = data.calendar[i], data.calendar[i + 1]
+
+    assert desc.loc[d, "log_rv_desc"] == pytest.approx(
+        np.log(ctx.rv_intraday[d]))
+    assert desc.loc[d, "overnight_gap_desc"] == pytest.approx(ctx.overnight[d])
+    loc = (ctx.day_close[d] - ctx.day_low[d]) / (ctx.day_high[d] - ctx.day_low[d])
+    assert desc.loc[d, "close_loc_desc"] == pytest.approx(loc)
+
+    # the predictive column at d+1 is exactly today's (unlagged) descriptive
+    # value carried forward one day - proving the two are offset by design
+    assert desc.loc[d, "close_loc_desc"] == pytest.approx(
+        pred.loc[d_next, "close_loc_1d"])
+    assert list(desc.columns) == list(F.DESCRIPTIVE_COLUMNS)
+
+
 def test_realized_moments_reasonable(full):
     X = full["prev_close"]
     assert X["rkurt_1d"].median() > 3          # t(5) returns: fat tails

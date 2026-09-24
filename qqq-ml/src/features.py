@@ -485,6 +485,15 @@ def _gap(ctx):
     return ctx.overnight
 
 
+@register("overnight_gap_1d", "prev_close",
+          "t-1's own overnight gap (session t-2 close to t-1 open), lagged "
+          "into row t - the predictive-label counterpart of overnight_gap, "
+          "which is only known at t's own 09:30 open and can't be used to "
+          "predict t")
+def _gap_1d(ctx):
+    return ctx.lag(ctx.overnight)
+
+
 @register("day_of_week", "calendar", "weekday of t (0=Mon .. 4=Fri)")
 def _dow(ctx):
     return pd.Series(ctx.cal.dayofweek, index=ctx.cal, dtype=float)
@@ -585,6 +594,57 @@ def build_feature_matrix(data: MarketData, cutoff: str = "prev_close",
     X = pd.DataFrame(cols, index=ctx.cal)
     X.index.name = "date"
     X.attrs["cutoff"] = cutoff
+    return X
+
+
+# --------------------------------------------------------------------------
+# Descriptive (same-day, post-hoc) state features - week 6
+# --------------------------------------------------------------------------
+DESCRIPTIVE_COLUMNS = ("log_rv_desc", "close_loc_desc", "volume_rel_desc",
+                      "overnight_gap_desc")
+# predictive (decision-safe, prev_close cutoff) counterparts, same order
+PREDICTIVE_STATE_COLUMNS = ("har_logrv_1d", "close_loc_1d", "volume_rel_20d",
+                           "overnight_gap_1d")
+
+
+def build_descriptive_matrix(data: MarketData, cfg: FeatureConfig = FeatureConfig(),
+                             volume_window: int | None = None) -> pd.DataFrame:
+    """Same-day versions of the four state features, for *labeling only*.
+
+    Every column here uses day t's own realized values - explicitly **not**
+    decision-safe (do not feed these into a strategy or a fold-fit model;
+    see ``build_feature_matrix(..., cutoff="prev_close")`` and the
+    ``*_1d``/``*_20d`` columns there for the predictive counterparts a
+    strategy is actually allowed to use). Column names carry a ``_desc``
+    suffix so the two matrices can never be mixed up by accident.
+
+    * ``log_rv_desc``: log of day t's own intraday realized variance.
+    * ``close_loc_desc``: (close-low)/(high-low) of day t's own session
+      (0.5 if high == low).
+    * ``volume_rel_desc``: day t's own RTH volume / the mean RTH volume of
+      the 20 sessions t-19..t (inclusive of t - there is no look-ahead
+      concern here since this label is never used for a decision).
+    * ``overnight_gap_desc``: day t's own overnight gap (same value as the
+      ``overnight_gap`` feature, cutoff "open" - included here under a
+      ``_desc`` name for a single consistent descriptive matrix).
+    """
+    ctx = FeatureContext(data, cfg)
+    w = volume_window or cfg.volume_window
+    mp = max(1, int(np.ceil(w * cfg.min_periods_frac)))
+
+    log_rv = np.log(ctx.rv_intraday.where(ctx.rv_intraday > 0))
+    rng = ctx.day_high - ctx.day_low
+    close_loc = ((ctx.day_close - ctx.day_low) / rng.where(rng > 0)).mask(
+        rng == 0, 0.5)
+    vol_avg = ctx.on_cal(ctx.day_volume).rolling(w, min_periods=mp).mean()
+    volume_rel = ctx.day_volume / vol_avg
+
+    X = pd.DataFrame({"log_rv_desc": log_rv, "close_loc_desc": close_loc,
+                      "volume_rel_desc": volume_rel,
+                      "overnight_gap_desc": ctx.overnight},
+                     index=ctx.cal).astype(float)
+    X.index.name = "date"
+    X.attrs["cutoff"] = "descriptive (same-day, not decision-safe)"
     return X
 
 
