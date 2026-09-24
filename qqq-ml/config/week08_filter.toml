@@ -1,0 +1,136 @@
+# Week 8 (phase 4, week 1) main-analysis config for the trading-day filter
+# pipeline. Fixed BEFORE looking at any filtering result - see
+# reports/week08_filter_baseline.md section 1 for the confirmation. Any
+# change is written into this file with a reason (same convention as
+# config/week07_regime_eval.toml).
+#
+# Week 8 only proves the pipeline with logistic regression. Week 9 swaps
+# the model (and adds the continuous-R regression comparison this config
+# already stores labels for); week 10 repeats for VWAP.
+
+[base_strategy]
+name = "orb"                  # ORB (paper's strategy B), main cost + unit
+                              # exposure (src/rules.py MAIN_COMMISSION +
+                              # MAIN_SLIPPAGE, run_orb() default) - never the
+                              # paper-replication cost/sizing mode
+vwap = "deferred_to_week_10"
+
+[cutoff]
+decision_time = "open_5m"     # t's first 5-min bar close, 09:35 ET - already
+                              # a defined cutoff in src/features.py (CUTOFFS),
+                              # and exactly ORB's own entry timing (range_
+                              # minutes=5, entry at the second bar's open) -
+                              # the filter decides whether to take a trade
+                              # ORB would otherwise already be entering
+
+[features]
+# --- amended before looking at any filtering result; reason: cross-feature
+# date-coverage gap found while building src/features_open.py. HAR+
+# residual-XGB's forecast and the HMM's predictive state/probability (the
+# two stage-2-model features originally specified) only exist from
+# 2019-01-02 (their own walk-forward warm-up), years after ORB's own
+# 2014-12-22 start. Requiring both non-NaN for the whole modeling universe
+# would cut available folds from ~8 (full sample) to ~4-5 (test period
+# 2022-2026 only).
+main_analysis = """
+full ORB sample (~2015-01-20 on, after the 22-day HAR/ATR/volume warm-up)
+without the two stage-2-model features; the three raw HAR log-RV windows
+(t-1, t-5-avg, t-22-avg - already registered, no walk-forward warm-up of
+their own) are used instead so the model can learn volatility information
+itself from data available for the whole sample
+"""
+robustness_2019_subsample = """
+on the 2019-01-02+ subsample only, compare with vs without adding back
+har_resid_xgb_pred_var / hmm_state / hmm_state_prob - both versions run on
+the exact same subsample, so this isolates the two features' marginal
+value from the sample-period difference
+"""
+
+[label]
+primary = "net_r_positive"    # r_net > 0 (src/rules.py run_orb() output,
+                              # after MAIN_COMMISSION+MAIN_SLIPPAGE)
+exclude_doji = true           # traded == False (reason == "doji") days are
+                              # dropped from the modeling set entirely, not
+                              # coded as a negative label - ORB itself never
+                              # enters on those days, so there is nothing for
+                              # the filter to decide; "day filtered out" and
+                              # "day ORB doesn't trade" stay two different
+                              # things throughout
+continuous_target = "r_net"   # stored alongside the binary label (not used
+                              # by the week 8 logistic baseline) so week 9's
+                              # regression comparison reads the same label
+                              # file without recomputing anything
+
+[model]
+type = "logistic_regression"
+class_weight = "balanced"
+standardize = "in_pipeline_fit_train_window_only"  # sklearn Pipeline
+                                                    # (StandardScaler ->
+                                                    # LogisticRegression);
+                                                    # scaler fit only on the
+                                                    # model-fit window below,
+                                                    # never on validation or
+                                                    # test rows
+splitter = "src.validation.WalkForwardSplit defaults (train_years=3, test_years=1, step_years=1)"
+                              # same splitter used throughout the project
+
+[model.threshold_selection]
+# Nested split inside each fold's 3-year training window, calendar-based
+# (same pd.DateOffset convention as WalkForwardSplit itself):
+#   model_fit window:  [train_start, validation_start)   (~first 2 years)
+#   validation window: [validation_start, test_start)     (~last 1 year)
+#   validation_start = test_start - 1 year
+# Main analysis (no refit - amended after initial draft; reason: the
+# deployed model and the model that produced the validation-year
+# probabilities used to pick the threshold must be the same model, or the
+# threshold is being picked for a different probability distribution than
+# the one it's applied to):
+# 1. Fit the logistic regression on the model-fit window only.
+# 2. Score the validation window with THIS model. Candidate thresholds are
+#    this model's validation-window probability quantiles corresponding to
+#    retention_grid (below) - e.g. the 70th-percentile-from-the-top
+#    probability keeps the top 30% of validation days.
+# 3. Pick the candidate maximizing validation-window cost-adjusted Sharpe
+#    among those leaving >= min_trades_per_year (below) trades/year in the
+#    validation window; ties broken by higher retention. 100% retention
+#    (no filter) is always a candidate, so a validation window with no
+#    visible filtering benefit can select "don't filter".
+# 4. Apply this same model's probabilities and this exact threshold value
+#    to the test fold, unchanged.
+# The test fold is never used to fit, scale, or pick a threshold - only to
+# evaluate the already-fixed (model, threshold) pair from steps 1-4.
+retention_grid = [0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00]
+min_trades_per_year = 20
+
+[model.threshold_selection.robustness_refit]
+# Robustness variant only (not the headline result): does using more
+# training data for the deployed model change the conclusion? Refit the
+# logistic regression on the FULL 3-year training window. Since this is a
+# different model from the one the threshold was chosen against, its
+# validation-window probabilities have a different distribution, so the
+# raw threshold value cannot be reused directly - instead:
+#   1. Take the RETENTION RATE (fraction of validation-window days kept)
+#      that the main analysis's step 3 selected for this fold.
+#      lookup = "same retention_grid entry selected in the main analysis"
+#   2. Find the refit model's own validation-window probability quantile
+#      that yields that same retention rate (still only the validation
+#      window - never the test fold).
+#   3. Apply the refit model + this requantiled threshold to the test fold.
+description = "refits on the full 3y train window; reuses the main analysis's selected RETENTION RATE, requantified against the refit model's own validation-window probabilities"
+
+[significance]
+success_requires_all_of = [
+  "filtered cost-adjusted Sharpe (test folds, concatenated OOS) > unfiltered ORB Sharpe, same window",
+  "filtered Sharpe > 95th percentile of the random-filter null (below)",
+  "filtered trades/year >= 20 in every test fold",
+]
+
+[significance.random_filter_null]
+n_reps = 1000
+method = """
+per test fold, draw (without replacement) the same number of days the
+fold's threshold rule actually kept, uniformly from that fold's non-doji
+ORB-signal test days; concatenate all folds' draws into one full-OOS-period
+Sharpe per repetition, same as the filtered/unfiltered series - not a
+per-fold null
+"""

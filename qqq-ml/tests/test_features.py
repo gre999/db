@@ -82,6 +82,38 @@ def test_later_cutoff_features_excluded(full):
                                names=["overnight_gap"])
 
 
+def test_open_5m_features_unchanged_by_later_minute_data(data):
+    """Stronger than truncation: MUTATE (not remove) every bar starting at
+    or after a day's 09:35 cutoff - including later in the SAME session and
+    every later session - and require the open_5m-cutoff feature row for
+    that day is bit-for-bit unchanged. Truncation only proves a feature
+    doesn't break when later data is absent; this proves it doesn't read
+    later data's *values* even when they differ, which a truncation-only
+    check can't catch (e.g. an accidental read of the whole day's bars
+    instead of just the first one)."""
+    d = data.calendar[300]
+    t_cut = F.cutoff_time(pd.DatetimeIndex([d]), "open_5m", data.calendar)[0]
+    names = [s.name for s in F.available_features("open_5m", data)
+            if s.cutoff == "open_5m"]
+    assert names, "no open_5m features registered"
+
+    before = F.build_feature_matrix(data, "open_5m", names=names).loc[d]
+
+    b = data.bars5.copy()
+    mask = b["bar_end"] > t_cut
+    assert mask.sum() > 0
+    for col in ("open", "high", "low", "close", "vwap"):
+        b.loc[mask, col] = b.loc[mask, col] * 3 + 1000
+    b.loc[mask, "volume"] = b.loc[mask, "volume"] * 5 + 10_000
+    mutated = F.MarketData(b, data.calendar, data.dividends, data.vol_index)
+
+    after = F.build_feature_matrix(mutated, "open_5m", names=names).loc[d]
+    diff = [c for c in names
+           if not (np.isclose(before[c], after[c], rtol=0, atol=1e-12)
+                   or (np.isnan(before[c]) and np.isnan(after[c])))]
+    assert not diff, f"changed by post-09:35 data mutation: {diff}"
+
+
 def test_extras_respect_cutoff(data):
     s = pd.Series(1.0, index=data.calendar)
     X = F.build_feature_matrix(data, "open", names=["day_of_week"],

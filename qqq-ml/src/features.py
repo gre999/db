@@ -11,8 +11,8 @@ calendar      exchange schedule only (known in advance): day of week,
 prev_close    everything up to the previous session's close, including
               the Cboe index close (16:15; 13:15 on half days)
 open          plus day t's opening print (first 5-min bar's *open* only)
-open_5m       plus day t's first 5-min bar (09:30-09:35) - reserved for
-              stage 4 (e.g. opening 5-min relative volume)
+open_5m       plus day t's first 5-min bar (09:30-09:35) - the trade-
+              filter features (stage 4, e.g. opening 5-min relative volume)
 ============  ==========================================================
 
 ``build_feature_matrix(data, cutoff="prev_close")`` returns only the
@@ -312,6 +312,34 @@ class FeatureContext:
         return self._eod(self._g["volume"].sum())
 
     @cached_property
+    def first_bar(self) -> pd.DataFrame:
+        """Session s's first 5-min bar (09:30-09:35 ET) OHLCV - known at
+        s's 09:35, the "open_5m" cutoff. Not ``_eod``-masked (like
+        :attr:`day_open`, a bar's own completeness doesn't depend on how
+        the rest of the session later turns out) - matches
+        ``src/rules.py``'s ORB range bar exactly (same 5-min aggregation,
+        verified to match numerically day for day)."""
+        g = self._g
+        return pd.DataFrame({
+            "open": self.on_cal(g["open"].first()),
+            "high": self.on_cal(g["high"].first()),
+            "low": self.on_cal(g["low"].first()),
+            "close": self.on_cal(g["close"].first()),
+            "volume": self.on_cal(g["volume"].first()),
+        })
+
+    @cached_property
+    def true_range(self) -> pd.Series:
+        """Session s's true range: max(high-low, |high-prev_close|,
+        |low-prev_close|) - known at s's close."""
+        prev_close = self.day_close.shift(1)
+        return pd.concat([
+            self.day_high - self.day_low,
+            (self.day_high - prev_close).abs(),
+            (self.day_low - prev_close).abs(),
+        ], axis=1).max(axis=1)
+
+    @cached_property
     def dividend(self) -> pd.Series:
         return self.data.dividends.reindex(self.cal).fillna(0.0)
 
@@ -551,6 +579,77 @@ def _vix_chg(ctx):
           "over sessions t-20..t-1")
 def _hist_cc_var_20d(ctx):
     return ctx.rolling_mean(ctx.cc_return ** 2, 20)
+
+
+# --- pre-open trade-filter features (week 8, phase 4) ---------------------
+@register("ret_cc_1d", "prev_close",
+          "t-1's own close-to-close (intraday + overnight) log return, "
+          "lagged into row t")
+def _ret_cc_1d(ctx):
+    return ctx.lag(ctx.cc_return)
+
+
+@register("atr_20d", "prev_close",
+          "trailing 20-session average true range: mean of "
+          "max(high-low, |high-prev_close|, |low-prev_close|) over "
+          "sessions t-20..t-1")
+def _atr_20d(ctx):
+    return ctx.rolling_mean(ctx.true_range, 20)
+
+
+@register("gap_atr_ratio", "open",
+          "day t's overnight gap / atr_20d - a scale-free gap size "
+          "relative to the recent daily range")
+def _gap_atr_ratio(ctx):
+    return ctx.overnight / _atr_20d(ctx)
+
+
+# --- first-5-min-bar trade-filter features (week 8, phase 4) --------------
+@register("open5m_direction", "open_5m",
+          "sign of t's first 5-min bar (close - open): +1/-1, 0 on a "
+          "doji (close == open) - matches src/rules.py orb_day()'s own "
+          "direction rule exactly")
+def _open5m_direction(ctx):
+    fb = ctx.first_bar
+    return np.sign(fb["close"] - fb["open"])
+
+
+@register("open5m_body_ratio", "open_5m",
+          "|close-open| / (high-low) of t's first 5-min bar - how much of "
+          "the opening range the candle's body fills")
+def _open5m_body_ratio(ctx):
+    fb = ctx.first_bar
+    rng = fb["high"] - fb["low"]
+    return ((fb["close"] - fb["open"]).abs() / rng).where(rng > 0)
+
+
+@register("open5m_range_rel", "open_5m",
+          "(high-low) of t's first 5-min bar / mean first-5-min (high-low) "
+          "of sessions t-20..t-1")
+def _open5m_range_rel(ctx):
+    fb = ctx.first_bar
+    rng = fb["high"] - fb["low"]
+    return rng / ctx.rolling_mean(rng, 20)
+
+
+@register("open5m_rel_volume", "open_5m",
+          "volume of t's first 5-min bar / mean first-5-min volume of "
+          "sessions t-20..t-1")
+def _open5m_rel_volume(ctx):
+    vol = ctx.first_bar["volume"]
+    return vol / ctx.rolling_mean(vol, 20)
+
+
+@register("open5m_gap_agree", "open_5m",
+          "1 if t's first-5-min direction (open5m_direction) has the same "
+          "sign as t's overnight gap, 0 if opposite signs, NaN if either "
+          "is exactly zero (doji or zero gap)")
+def _open5m_gap_agree(ctx):
+    d = _open5m_direction(ctx)
+    g = np.sign(ctx.overnight)
+    same = (d == g) & (d != 0) & (g != 0)
+    undefined = (d == 0) | (g == 0)
+    return pd.Series(np.where(undefined, np.nan, same.astype(float)), index=d.index)
 
 
 # --------------------------------------------------------------------------
