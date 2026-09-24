@@ -120,3 +120,24 @@ def test_block_bootstrap_sharpe_diff():
     obs0, p0 = B.block_bootstrap_sharpe_diff(ra, ra, block_size=20, n_boot=200, seed=1)
     assert obs0 == pytest.approx(0.0)
     assert p0 == pytest.approx(1.0)
+
+
+def test_regress_weight_diff_on_return_detects_return_timing():
+    """A weight difference that's genuinely aligned with the return it earns
+    (return timing) must come back with a significant positive slope close
+    to the true one; a weight difference independent of the return must not."""
+    rng = np.random.default_rng(5)
+    idx = pd.bdate_range("2018-01-01", periods=1500)
+    w_b = pd.Series(1.0, index=idx)
+
+    true_slope = 0.05
+    diff = pd.Series(rng.normal(0, 0.3, len(idx)), index=idx)
+    ret = pd.Series(0.0003 + true_slope * diff.to_numpy()
+                    + rng.normal(0, 0.01, len(idx)), index=idx)
+    res = B.regress_weight_diff_on_return(w_b + diff, w_b, ret)
+    assert res["slope"] == pytest.approx(true_slope, rel=0.3)
+    assert res["slope_p"] < 0.01
+
+    ret_indep = pd.Series(rng.normal(0.0003, 0.01, len(idx)), index=idx)
+    res_noise = B.regress_weight_diff_on_return(w_b + diff, w_b, ret_indep)
+    assert res_noise["slope_p"] > 0.10

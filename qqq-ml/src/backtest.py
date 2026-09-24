@@ -31,10 +31,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 from src import data_loader as dl
 from src import strategies as S
 from src.models.base import load_predictions
+from src.models.har import newey_west_cov
 
 log = logging.getLogger(__name__)
 OUT_DIR = dl.PROCESSED_DIR / "backtests"
@@ -225,6 +227,35 @@ def block_bootstrap_sharpe_diff(ret_a: pd.Series, ret_b: pd.Series,
     centered = diffs - diffs.mean()
     p = float(np.mean(np.abs(centered) >= abs(obs)))
     return float(obs), p
+
+
+def regress_weight_diff_on_return(weight_a: pd.Series, weight_b: pd.Series,
+                                  ret: pd.Series, lags: int | None = None
+                                  ) -> dict:
+    """OLS of the same-day return on ``weight_a - weight_b``, Newey-West HAC se.
+
+    Return-timing vs risk-timing diagnostic: if source A is more cautious
+    than B specifically on days that turn out to have worse returns (and
+    more aggressive on days with better returns), the weight difference has
+    a significant *positive* slope on the return that weight earns - the
+    source's edge is about which days it's positioned for, not just how
+    precisely it hits a volatility target. A source that only differs from
+    B by noise around a shared risk target would have a slope of ~0.
+    """
+    diff = (weight_a - weight_b).dropna()
+    idx = diff.index.intersection(ret.dropna().index)
+    x, y = diff.loc[idx].to_numpy(), ret.loc[idx].to_numpy()
+    n = len(x)
+    lags = int(np.floor(n ** (1 / 3))) if lags is None else lags
+    Z = np.column_stack([np.ones(n), x])
+    beta, *_ = np.linalg.lstsq(Z, y, rcond=None)
+    resid = y - Z @ beta
+    se = np.sqrt(np.diag(newey_west_cov(Z, resid, lags)))
+    tstat = beta / se
+    pval = 2 * stats.norm.sf(np.abs(tstat))
+    return {"n": n, "intercept": float(beta[0]), "slope": float(beta[1]),
+           "slope_se": float(se[1]), "slope_t": float(tstat[1]),
+           "slope_p": float(pval[1])}
 
 
 # --------------------------------------------------------------------------

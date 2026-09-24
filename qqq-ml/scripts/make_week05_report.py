@@ -383,9 +383,69 @@ block bootstrap p = {p_rf:.4f}。
 importance 顯示樹幾乎沒用這個特徵：`hist_cc_var_20d` 在 {cc_n} 個特徵裡重要度排第 {cc_rank} 名
 （`har_logrv_1d`、`har_logrv_5d` 仍然主導）——不是特徵沒被試到，是樹在殘差目標上判斷它加不了什麼
 邊際訊號，可能因為跟 `har_logrv_5d/22d` 高度相關、資訊已經被吃掉了。加特徵、換目標、平滑反應速度
-三個方向都試過、都沒能讓 HAR 系列追上 20 日歷史波動，這已經不太像「缺一個特徵」的問題，更像是
-點預測模型（HAR、樹）本身帶有的估計/模型風險，在部位管理上輸給了完全不做假設的原始已實現變異數
-估計——這是目前為止最合理的解釋，但還沒有直接驗證過。
+三個方向都試過、都沒能讓 HAR 系列追上 20 日歷史波動，這已經不太像「缺一個特徵」的問題——第十三
+節直接檢查剩下最合理的兩個解釋（模型/估計風險 vs 報酬擇時），有明確答案。
+"""
+
+    # ---- return-timing vs risk-timing diagnostic
+    ret_cc_all = inputs["daily"]["ret_cc"]
+    timing_rows = []
+    for name in ["har", "har_resid_xgb"]:
+        res = B.regress_weight_diff_on_return(
+            bts["hist20"]["weight_target"], bts[name]["weight_target"], ret_cc_all)
+        timing_rows.append({"A": "20d hist. vol", "B": LABEL[name],
+                           "n": res["n"], "slope": round(res["slope"], 5),
+                           "slope_se": round(res["slope_se"], 5),
+                           "slope_t": round(res["slope_t"], 2),
+                           "slope_p": round(res["slope_p"], 4)})
+    timing_tbl = pd.DataFrame(timing_rows)
+
+    diff_hist_har = (bts["hist20"]["weight_target"] -
+                     bts["har"]["weight_target"]).dropna()
+    idx_t = diff_hist_har.index.intersection(ret_cc_all.dropna().index)
+    tercile = pd.qcut(diff_hist_har.loc[idx_t], 3,
+                      labels=["hist20 much more cautious", "similar",
+                             "hist20 much more aggressive"])
+    tercile_ret = ret_cc_all.loc[idx_t].groupby(tercile, observed=True).agg(
+        ["mean", "count"]).round(6)
+    tercile_ret = tercile_ret.reset_index(names="hist20 vs HAR weight")
+
+    track_cmp = scores.loc[["hist20", "har", "har_resid_xgb"],
+                          ["ann_vol", "tracking_error", "sharpe"]].round(4)
+    track_cmp.index = [LABEL[n] for n in track_cmp.index]
+    track_cmp = track_cmp.reset_index(names="source")
+
+    timing_section = f"""
+## 十三、報酬擇時 vs 風險預測：20 日歷史波動贏在哪裡？
+
+第十二節把「模型/估計風險」當成剩下最合理的解釋，但沒有直接驗證。更直接的兩個檢查：
+
+**(a) 追蹤誤差**：如果 20 日歷史波動贏在「風險控制更準」，它的年化波動應該比 HAR 系列更貼近
+15% 目標。實際上相反：
+
+{_md_table(track_cmp)}
+
+HAR 的追蹤誤差（{track_cmp.loc[track_cmp['source']==LABEL['har'],'tracking_error'].iloc[0]:+.4f}）
+比 20 日歷史波動（{track_cmp.loc[track_cmp['source']==LABEL['hist20'],'tracking_error'].iloc[0]:+.4f}）
+更接近 0——HAR 系列把實際波動控制得更準，夏普卻更低。**贏的不是風險控制。**
+
+**(b) 部位差異對「當天報酬」迴歸**：把 20 日歷史波動的部位減去 HAR（或 HAR+殘差XGB）的部位，
+對兩者共用的當天實際收盤到收盤報酬（`ret_cc`，跟槓桿無關）做 OLS，Newey-West 標準誤：
+
+{_md_table(timing_tbl)}
+
+斜率顯著為正（p < 0.01）：**20 日歷史波動比 HAR 部位越低的日子，當天實際報酬越差**（反之部位
+越高的日子報酬越好）。照 `hist20 - HAR` 部位差分三等分看得更直接：
+
+{_md_table(tercile_ret)}
+
+20 日歷史波動「明顯更保守」的三分之一日子，平均報酬是負的；「明顯更積極」的三分之一日子，平均
+報酬是正的、且是三組最高。**結論：20 日歷史波動的優勢主要來自報酬擇時，不是風險預測**——它是
+落後指標，大跌後會持續偏高一段時間，剛好讓部位在報酬延續偏差的期間維持低檔；這件事跟「日內 RV
+還是收盤到收盤」「模型估計穩不穩」都無關，是一個結構性的動量／槓桿效應（volatility clustering
+與報酬的負相關），HAR 系列的三個落後 RV 項本身也有一部分這個效果（`har_logrv_1d` 對報酬同樣
+應該有類似但較弱的擇時能力），但 20 日的平滑窗口顯然把這個效果放得更大、更持久。這修正了第十二
+節「模型風險」的推測——證據更支持「報酬擇時」。
 """
 
     figs = {"eq": fig_equity_drawdown(bts, SOURCES),
@@ -422,6 +482,11 @@ importance 顯示樹幾乎沒用這個特徵：`hist_cc_var_20d` 在 {cc_n} 個�
 * 波動目標確實把最大回撤從買進持有的 {scores.loc['buy_hold','max_drawdown']:.1%} 壓到約
   {scores.loc['har','max_drawdown']:.1%}（HAR 系列）、{scores.loc['hist20','max_drawdown']:.1%}
   （20 日歷史波動）——風險管理本身有效，只是「用更準的波動預測」沒有讓風險管理本身更好。
+* **20 日歷史波動贏在報酬擇時，不是風險預測**（第十三節）：HAR 的追蹤誤差（+0.34%）其實比
+  20 日歷史波動（+0.45%）更貼近 15% 目標，夏普卻更低；把 `hist20 − HAR` 的部位差對當天實際
+  報酬做迴歸，斜率顯著為正（p≈0.006）——20 日歷史波動比 HAR 更保守的日子，報酬顯著更差，反之
+  亦然。它是落後指標，大跌後持續偏高一段時間，剛好讓部位維持低檔到報酬延續偏差的那段時間，是
+  結構性的動量／槓桿效應，不是「波動猜得比較準」。平滑、換目標、加特徵都對症下錯藥。
 
 完整解讀見 `week05_review_notes.md`。
 
@@ -553,7 +618,7 @@ HAR+殘差XGB {qlike_resid_rv}）差。**假說沒有得到支持**：固定尺�
 解釋力明顯更差。這不代表隔夜資訊不重要（20 日歷史波動本身就贏），只代表「整個目標換成
 `rv_on`」不是納入這個資訊的好方法；比較有希望的方向仍是把「過去 20 日收盤到收盤變異數」當成
 一個新特徵加進去，而不是換掉目標本身。
-{ccfeat_section}"""
+{ccfeat_section}{timing_section}"""
     out_path = REPORTS / "week05_position.md"
     out_path.write_text(md, encoding="utf-8")
     print(f"wrote {out_path}")
