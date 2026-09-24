@@ -312,6 +312,16 @@ class FeatureContext:
         return np.log((self.day_open + self.dividend) / prev_close)
 
     @cached_property
+    def cc_return(self) -> pd.Series:
+        """log((close_s + div_s) / close_{s-1}): the full close-to-close
+        return (intraday + overnight), known at s's close.
+
+        NaN when session s or s-1 is missing/invalid.
+        """
+        prev_close = self.day_close.shift(1)
+        return np.log((self.day_close + self.dividend) / prev_close)
+
+    @cached_property
     def _returns(self) -> pd.DataFrame:
         return intraday_returns(self.data.bars5)
 
@@ -510,6 +520,15 @@ def _jump(ctx):
           "Cboe close before that", needs=("vix",))
 def _vix_chg(ctx):
     return ctx.vol_index_prev("vix", diff=True)
+
+
+# --- close-to-close historical vol (week 5) -------------------------------
+@register("hist_cc_var_20d", "prev_close",
+          "trailing 20-session close-to-close variance: mean of squared "
+          "full-day (intraday + overnight, dividend-adjusted) log returns "
+          "over sessions t-20..t-1")
+def _hist_cc_var_20d(ctx):
+    return ctx.rolling_mean(ctx.cc_return ** 2, 20)
 
 
 # --------------------------------------------------------------------------

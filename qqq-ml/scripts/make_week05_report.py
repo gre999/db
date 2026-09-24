@@ -329,6 +329,65 @@ block bootstrap p = {p_rf:.4f}。
     qlike_har_rv = two_layer.loc[LABEL["har"], "QLIKE"]
     qlike_resid_rv = two_layer.loc[LABEL["har_resid_xgb"], "QLIKE"]
 
+    # ---- feature diagnostic: add trailing cc variance as a feature instead
+    ccfeat_path = B.dl.PROCESSED_DIR / "predictions" / \
+        "week5_har_resid_xgb_ccfeat.parquet"
+    ccfeat_section = ""
+    if ccfeat_path.exists():
+        p_cc = load_predictions("week5_har_resid_xgb_ccfeat")
+        p_cc = p_cc[(p_cc["model"] == "har_resid_xgb_ccfeat") &
+                   (p_cc["target"] == "rv")].set_index("date").sort_index()
+        idx_cc = p_cc.index.intersection(inputs["common_index"])
+        p_cc = p_cc.reindex(idx_cc)
+        var_cc_feat = S.cc_variance_forecast(p_cc, inputs["ratios"])
+        w_cc = S.vol_target_weight(var_cc_feat, cfg.vol_target, cfg.leverage_cap)
+        bt_cc = B.run_backtest(w_cc, inputs["daily"], timing=cfg.timing,
+                               cost_bps=cfg.cost_bps, band=cfg.band)
+        bts["har_resid_xgb_ccfeat"] = bt_cc
+        ev_cc = B.evaluate(bt_cc, cfg.vol_target)
+        rv_on_cc = inputs["rv_on"].reindex(idx_cc)
+        ok = var_cc_feat.notna() & rv_on_cc.notna() & \
+            (var_cc_feat > 0) & (rv_on_cc > 0)
+        qlike_cc = M.qlike(rv_on_cc[ok], var_cc_feat[ok])
+        _, p_cc_vs_hist20 = B.block_bootstrap_sharpe_diff(
+            bt_cc["net_return"], bts["hist20"]["net_return"].reindex(idx_cc),
+            block_size=20, n_boot=3000, seed=0)
+        _, p_cc_vs_base = B.block_bootstrap_sharpe_diff(
+            bt_cc["net_return"], bts["har_resid_xgb"]["net_return"].reindex(idx_cc),
+            block_size=20, n_boot=3000, seed=0)
+        imp_cc = pd.read_parquet(B.dl.PROCESSED_DIR / "predictions" /
+                                 "week5_har_resid_xgb_ccfeat_importance.parquet")
+        imp_all_cc = imp_cc[imp_cc["slice"] == "all"].groupby(
+            "feature")["importance"].mean().sort_values(ascending=False)
+        cc_rank = int(imp_all_cc.rank(ascending=False)["hist_cc_var_20d"])
+        cc_n = len(imp_all_cc)
+        cc_tbl = pd.DataFrame([{
+            "source": "har_resid_xgb_ccfeat", "QLIKE": round(qlike_cc, 4),
+            "sharpe": round(ev_cc["sharpe"], 4),
+            "max_drawdown": round(ev_cc["max_drawdown"], 4),
+            "avg_turnover": round(ev_cc["avg_turnover"], 4),
+            "p vs hist20": round(p_cc_vs_hist20, 4),
+            "p vs base (no cc feature)": round(p_cc_vs_base, 4)}])
+        ccfeat_section = f"""
+## 十二、特徵診斷：把過去 20 日收盤到收盤變異數當新特徵，而不是換掉目標
+
+`src/features.py::hist_cc_var_20d`：跟 HAR 三項寫法完全平行（`ctx.rolling_mean`），
+過去 20 個交易日（t-20..t-1）收盤到收盤（含隔夜、含股利）報酬平方的平均，`prev_close` cutoff，
+自動通過第五節提到的時點正確性測試。加進 HAR+殘差XGB 的樹特徵集（15 個變成 16 個），其他都不變。
+
+{_md_table(cc_tbl)}
+
+**還是沒有追上**：夏普 {cc_tbl.iloc[0]['sharpe']} 跟原本沒加這個特徵的版本
+（{ev_base['sharpe']:.4f}）幾乎一樣（p = {cc_tbl.iloc[0]['p vs base (no cc feature)']}，
+不顯著），對 20 日歷史波動仍然顯著更差（p = {cc_tbl.iloc[0]['p vs hist20']}）。permutation
+importance 顯示樹幾乎沒用這個特徵：`hist_cc_var_20d` 在 {cc_n} 個特徵裡重要度排第 {cc_rank} 名
+（`har_logrv_1d`、`har_logrv_5d` 仍然主導）——不是特徵沒被試到，是樹在殘差目標上判斷它加不了什麼
+邊際訊號，可能因為跟 `har_logrv_5d/22d` 高度相關、資訊已經被吃掉了。加特徵、換目標、平滑反應速度
+三個方向都試過、都沒能讓 HAR 系列追上 20 日歷史波動，這已經不太像「缺一個特徵」的問題，更像是
+點預測模型（HAR、樹）本身帶有的估計/模型風險，在部位管理上輸給了完全不做假設的原始已實現變異數
+估計——這是目前為止最合理的解釋，但還沒有直接驗證過。
+"""
+
     figs = {"eq": fig_equity_drawdown(bts, SOURCES),
             "track": fig_tracking(bts, SOURCES, cfg.vol_target)}
 
@@ -494,7 +553,7 @@ HAR+殘差XGB {qlike_resid_rv}）差。**假說沒有得到支持**：固定尺�
 解釋力明顯更差。這不代表隔夜資訊不重要（20 日歷史波動本身就贏），只代表「整個目標換成
 `rv_on`」不是納入這個資訊的好方法；比較有希望的方向仍是把「過去 20 日收盤到收盤變異數」當成
 一個新特徵加進去，而不是換掉目標本身。
-"""
+{ccfeat_section}"""
     out_path = REPORTS / "week05_position.md"
     out_path.write_text(md, encoding="utf-8")
     print(f"wrote {out_path}")
