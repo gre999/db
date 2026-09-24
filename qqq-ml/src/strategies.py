@@ -86,6 +86,18 @@ def vol_target_weight(var_cc: pd.Series, vol_target: float = 0.15,
     return (vol_target / ann_vol).clip(upper=leverage_cap).rename("weight")
 
 
+def smooth_variance_forecast(var_cc: pd.Series, window: int = 20) -> pd.Series:
+    """Trailing mean of a model's own daily variance forecast, ending at t.
+
+    Diagnostic for "does 20-day historical vol win because it's smoother, or
+    because it has different information?" - averaging a model's own past
+    forecasts stays causal (each input was already known at its own date),
+    so this isolates the effect of reaction speed alone, holding the
+    forecast's information source fixed.
+    """
+    return var_cc.rolling(window, min_periods=window).mean().rename("var_cc_smoothed")
+
+
 def historical_vol_weight(ret_cc: pd.Series, window: int = 20,
                           vol_target: float = 0.15,
                           leverage_cap: float = 1.5) -> pd.Series:

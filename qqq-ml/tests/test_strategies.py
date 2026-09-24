@@ -64,6 +64,20 @@ def test_historical_vol_weight_is_causal():
     pd.testing.assert_series_equal(w.iloc[:40], w2.iloc[:40])
 
 
+def test_smooth_variance_forecast_is_causal_trailing_mean():
+    idx = pd.bdate_range("2020-01-01", periods=30)
+    var = pd.Series(np.arange(1, 31, dtype=float), index=idx)
+    sm = S.smooth_variance_forecast(var, window=5)
+    assert sm.iloc[:4].isna().all()
+    assert sm.iloc[4] == pytest.approx(var.iloc[0:5].mean())
+    assert sm.iloc[10] == pytest.approx(var.iloc[6:11].mean())
+
+    var2 = var.copy()
+    var2.iloc[20:] *= 100          # perturb only the future
+    sm2 = S.smooth_variance_forecast(var2, window=5)
+    pd.testing.assert_series_equal(sm.iloc[:20], sm2.iloc[:20])
+
+
 def test_buy_and_hold_weight_is_one():
     idx = pd.bdate_range("2020-01-01", periods=5)
     w = S.buy_and_hold_weight(idx)

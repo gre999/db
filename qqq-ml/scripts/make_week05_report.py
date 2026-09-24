@@ -256,6 +256,34 @@ def main() -> None:
 block bootstrap p = {p_rf:.4f}。
 """
 
+    # ---- smoothing diagnostic: reaction speed vs information content
+    p_resid = inputs["preds"]["har_resid_xgb"].reindex(inputs["common_index"])
+    var_cc_resid = S.cc_variance_forecast(p_resid, inputs["ratios"])
+    smooth_rows = []
+    for window in (10, 20, 40):
+        var_sm = S.smooth_variance_forecast(var_cc_resid, window)
+        w_sm = S.vol_target_weight(var_sm, cfg.vol_target, cfg.leverage_cap)
+        bt_sm = B.run_backtest(w_sm, inputs["daily"], timing=cfg.timing,
+                               cost_bps=cfg.cost_bps, band=cfg.band)
+        bts[f"har_resid_xgb_smooth{window}"] = bt_sm
+        ev_sm = B.evaluate(bt_sm, cfg.vol_target)
+        rv_on = inputs["rv_on"].reindex(var_sm.index)
+        ok = var_sm.notna() & rv_on.notna() & (var_sm > 0) & (rv_on > 0)
+        qlike_sm = M.qlike(rv_on[ok], var_sm[ok])
+        _, p_vs_hist20 = B.block_bootstrap_sharpe_diff(
+            bt_sm["net_return"], bts["hist20"]["net_return"],
+            block_size=20, n_boot=3000, seed=0)
+        _, p_vs_unsmoothed = B.block_bootstrap_sharpe_diff(
+            bt_sm["net_return"], bts["har_resid_xgb"]["net_return"],
+            block_size=20, n_boot=3000, seed=0)
+        smooth_rows.append({"window": window, "QLIKE": round(qlike_sm, 4),
+                           "sharpe": round(ev_sm["sharpe"], 4),
+                           "avg_turnover": round(ev_sm["avg_turnover"], 4),
+                           "p vs hist20": round(p_vs_hist20, 4),
+                           "p vs unsmoothed": round(p_vs_unsmoothed, 4)})
+    smooth_tbl = pd.DataFrame(smooth_rows)
+    smooth_tbl["window"] = smooth_tbl["window"].astype(str)
+
     figs = {"eq": fig_equity_drawdown(bts, SOURCES),
             "track": fig_tracking(bts, SOURCES, cfg.vol_target)}
 
@@ -381,6 +409,21 @@ p = {dm_tbl.iloc[-1]['p-value']}，沒有顯著幫助。
 
 HAR+殘差XGB 在 9 組裡有 {n_beats_har}/9 贏過 HAR、{n_beats_hist20}/9 贏過 20 日歷史波動
 ——方向完全一致，不是特定參數組合下的巧合。
+
+## 十、平滑診斷：20 日歷史波動贏是因為比較平滑，還是資訊不同？
+
+把 HAR+殘差XGB 的預測本身取過去 N 天平均（`src/strategies.py::smooth_variance_forecast`，
+只用該模型自己過去的預測、不引入新資訊，換手率因此大幅下降），看換手率降到跟 20 日歷史波動
+同一個量級之後，夏普有沒有追上：
+
+{_md_table(smooth_tbl)}
+
+**沒有追上**：換手率從原始的 11.2% 壓到 10 天平均的 2.0%（已經低於 20 日歷史波動的 3.0%），
+夏普只從 1.1375 微升到 1.1674（對未平滑版 p = {smooth_tbl.iloc[0]['p vs unsmoothed']}，不顯著），
+對 20 日歷史波動仍然顯著更差（p = {smooth_tbl.iloc[0]['p vs hist20']}）。窗口拉到 20、40 天，
+換手率降得更低，但 QLIKE 變差、夏普不升反降（40 天版本連 HAR 都輸）。**結論：20 日歷史波動贏
+不是因為反應速度，是因為它含有 HAR／HAR+殘差XGB 沒抓到的資訊**——單純放慢 HAR 系列的反應速度
+無法複製這個優勢。
 """
     out_path = REPORTS / "week05_position.md"
     out_path.write_text(md, encoding="utf-8")
