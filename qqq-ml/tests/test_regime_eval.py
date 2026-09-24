@@ -259,6 +259,141 @@ def test_state_performance_by_year_and_fold_have_expected_shape():
     assert set(by_fold["fold"]) == {1, 2}
 
 
+def test_state_vs_full_sample_test_recovers_known_effect_and_matches_manual_calc():
+    idx = pd.bdate_range("2020-01-01", periods=3000)
+    rng = np.random.default_rng(6)
+    states = rng.integers(0, 3, len(idx))
+    true_bps = {0: -5.0, 1: 0.0, 2: 8.0}
+    bps = np.array([true_bps[s] for s in states]) + rng.normal(0, 10, len(idx))
+    labels = _labels(idx, states)
+    strat = pd.DataFrame({"day": idx, "traded": True, "bps_return": bps})
+
+    out = E.state_vs_full_sample_test(labels, strat, "hmm").set_index("state")
+    full_mean = bps.mean()
+    for s in (0, 1, 2):
+        manual = bps[states == s].mean() - full_mean
+        assert out.loc[s, "diff_vs_full_sample"] == pytest.approx(manual, abs=1e-8)
+    assert out.loc[0, "p"] < 0.01
+    assert out.loc[2, "p"] < 0.01
+
+
+def test_state_vs_full_sample_test_null_case_not_significant():
+    idx = pd.bdate_range("2020-01-01", periods=500)
+    rng = np.random.default_rng(7)
+    states = rng.integers(0, 3, len(idx))
+    bps = rng.normal(0, 10, len(idx))       # independent of state
+    labels = _labels(idx, states)
+    strat = pd.DataFrame({"day": idx, "traded": True, "bps_return": bps})
+    out = E.state_vs_full_sample_test(labels, strat, "hmm").set_index("state")
+    assert (out["p"] > 0.05).all()
+
+
+def test_label_block_shuffle_null_detects_real_effect():
+    idx = pd.bdate_range("2020-01-01", periods=1500)
+    rng = np.random.default_rng(8)
+    states = rng.integers(0, 2, len(idx))
+    bps = np.where(states == 1, 15.0, -15.0) + rng.normal(0, 5, len(idx))
+    labels = _labels(idx, states, k=2)
+    strat = pd.DataFrame({"day": idx, "traded": True, "bps_return": bps})
+    out = E.label_block_shuffle_null(labels, strat, "hmm", block_size=10,
+                                     n_reps=300, seed=1).set_index("state")
+    assert out.loc[1, "p_vs_random_labeling"] < 0.01
+    assert out.loc[0, "p_vs_random_labeling"] < 0.01
+
+
+def test_label_block_shuffle_null_no_effect_is_not_tiny_p():
+    idx = pd.bdate_range("2020-01-01", periods=1000)
+    rng = np.random.default_rng(9)
+    states = rng.integers(0, 2, len(idx))
+    bps = rng.normal(0, 10, len(idx))
+    labels = _labels(idx, states, k=2)
+    strat = pd.DataFrame({"day": idx, "traded": True, "bps_return": bps})
+    out = E.label_block_shuffle_null(labels, strat, "hmm", block_size=10,
+                                     n_reps=300, seed=2).set_index("state")
+    assert (out["p_vs_random_labeling"] > 0.1).all()
+
+
+def test_daily_eval_matches_manual_calc():
+    ret_bps = pd.Series([100.0, -50.0, 100.0, -50.0])   # 1%, -0.5%, ...
+    out = E._daily_eval(ret_bps)
+    r = ret_bps.to_numpy() / 1e4
+    equity = np.cumprod(1 + r)
+    assert out["ann_return"] == pytest.approx(equity[-1] ** (252 / 4) - 1)
+    assert out["max_drawdown"] == pytest.approx(
+        (equity / np.maximum.accumulate(equity) - 1).min())
+
+
+def test_positive_states_from_training():
+    states = np.array([0, 0, 0, 1, 1, 1])
+    bps = np.array([-1.0, -2.0, 1.0, 1.0, 2.0, -0.5])   # state0 mean<0, state1 mean>0
+    pos = E._positive_states_from_training(states, bps)
+    assert pos == {1}
+
+
+def test_tradability_test_only_trades_training_positive_states():
+    idx = pd.bdate_range("2015-01-01", "2023-12-31")
+    rng = np.random.default_rng(11)
+    n = len(idx)
+    regime = rng.integers(0, 2, n)
+    log_rv = np.where(regime == 0, rng.normal(-10.0, 0.3, n),
+                      rng.normal(-8.0, 0.3, n))
+    X = pd.DataFrame({
+        "har_logrv_1d": log_rv, "close_loc_1d": rng.uniform(0, 1, n),
+        "volume_rel_20d": rng.normal(1.0, 0.2, n),
+        "overnight_gap_1d": rng.normal(0.0, 0.005, n),
+    }, index=idx)
+    # bps_return is strongly tied to the SAME regime driving log_rv, so the
+    # fitted HMM's low-vol state should come out training-positive and the
+    # high-vol state training-negative (or vice versa) - deterministically
+    # one side, not a coin flip
+    bps = np.where(regime == 0, 20.0, -20.0) + rng.normal(0, 5, n)
+    strat = pd.DataFrame({"day": idx, "traded": True, "bps_return": bps})
+
+    out = E.tradability_test(X, strat, "hmm", k_choices=(2, 3), n_init=3)
+    assert out["eval_filtered"]["n"] <= out["eval_unfiltered"]["n"]
+    assert set(out["filtered"].index) == set(out["unfiltered"].index)
+    # every fold with a decision made a nonempty choice one way or another
+    assert len(out["positive_states_by_fold"]) > 0
+
+
+def test_tradability_test_vol_tercile_matches_vol_tercile_labels_folds():
+    idx = pd.bdate_range("2015-01-01", "2022-12-31")
+    pred = _fake_predictions(idx)
+    fw = _fold_windows([("2018-01-01", "2018-12-31"), ("2019-01-01", "2019-12-31"),
+                       ("2020-01-01", "2020-12-31")])
+    rng = np.random.default_rng(12)
+    strat = pd.DataFrame({"day": idx, "traded": True,
+                         "bps_return": rng.normal(0, 10, len(idx))})
+    out = E.tradability_test_vol_tercile(strat, fw, pred)
+    assert set(out["positive_states_by_fold"]).issubset({1, 2, 3})
+    assert out["eval_filtered"]["n"] <= out["eval_unfiltered"]["n"]
+
+
+def test_tradability_common_dates_restricts_to_shared_range_and_matches_manual_eval():
+    idx_wide = pd.bdate_range("2019-01-01", "2019-01-31")   # 23 sessions
+    idx_narrow = idx_wide[5:]                                # missing first 5
+    ret = pd.Series(np.arange(len(idx_wide), dtype=float), index=idx_wide)
+
+    results = {
+        "wide": {"filtered": ret, "unfiltered": ret},
+        "narrow": {"filtered": ret.loc[idx_narrow], "unfiltered": ret.loc[idx_narrow]},
+    }
+    common, tbl = E.tradability_common_dates(results)
+    assert list(common) == list(idx_narrow)
+    assert len(common) == len(idx_wide) - 5
+
+    manual = E._daily_eval(ret.loc[idx_narrow])
+    for _, row in tbl.iterrows():
+        assert row["unfiltered_n"] == manual["n"]
+        assert row["unfiltered_sharpe"] == pytest.approx(manual["sharpe"])
+        assert row["filtered_sharpe"] == pytest.approx(manual["sharpe"])
+    # the "wide" source's own un-restricted eval used a longer series, so
+    # restricting it must actually change its number, not just relabel it
+    wide_full_eval = E._daily_eval(ret)
+    wide_row = tbl[tbl["model"] == "wide"].iloc[0]
+    assert wide_row["unfiltered_n"] != wide_full_eval["n"]
+
+
 def test_empirical_transition_matrix_ignores_fold_boundary():
     """states = [0, 1, 1, 0], folds = [1, 1, 2, 2]: the boundary step
     (row1->row2) would be a spurious (1->1) "stay" if counted - it must be
