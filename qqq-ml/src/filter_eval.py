@@ -290,14 +290,27 @@ def random_filter_p_value(preds: pd.DataFrame, orb: pd.DataFrame,
     """Exact rank of the actually-observed filtered Sharpe inside the
     random-filter null (config [significance.random_filter_null]) - the
     single number ``beats_random_p95`` in :func:`evaluate_success`
-    summarizes as a threshold check."""
+    summarizes as a threshold check.
+
+    ``se`` is the Monte Carlo standard error of ``p_value`` itself
+    (sqrt(p(1-p)/n_reps) - each repetition is an independent draw, so the
+    "null >= observed" indicator is i.i.d. Bernoulli(p) across
+    repetitions, exactly what that formula assumes). At n_reps=1000 this
+    is ~0.006-0.007 near p=0.03-0.05 - large enough that a single-seed
+    estimate reported to three decimal places (e.g. "0.030") can land on
+    either side of 0.05 purely from Monte Carlo noise, not a real
+    difference; n_reps=10000 (se ~0.002) is what week 10's robustness
+    section actually reports."""
     if null is None:
         null = random_filter_null(preds, orb, n_reps=n_reps, seed=seed)
     observed = E._daily_eval(logistic_filter_series(preds, orb)["filtered"])["sharpe"]
     n_at_or_above = int(np.sum(null >= observed))
-    return {"observed_sharpe": observed, "n_reps": len(null),
+    n = len(null)
+    p = n_at_or_above / n
+    se = float(np.sqrt(p * (1 - p) / n))
+    return {"observed_sharpe": observed, "n_reps": n,
            "rank_from_top": n_at_or_above + 1,
-           "p_value": n_at_or_above / len(null)}
+           "p_value": p, "se": se}
 
 
 def yearly_breakdown(preds: pd.DataFrame, orb: pd.DataFrame) -> pd.DataFrame:

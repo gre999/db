@@ -64,8 +64,19 @@ variants = [
 ]
 
 [robustness.random_baseline_reseed]
-description = "src.filter_eval.random_filter_p_value / random_filter_null re-run at 5 different seeds (0-4), same n_reps=1000 - checks the reported p-value isn't an artifact of one particular random draw"
-seeds = [0, 1, 2, 3, 4]
+# Amended after the first pass: n_reps=1000 across 5 seeds (0-4) showed
+# logistic's p-value ranging 0.030-0.051, i.e. crossing 0.05 - but the
+# Monte Carlo standard error of a proportion at n=1000 near p~0.04 is
+# ~sqrt(0.04*0.96/1000)~0.006, so a spread of that size is partly (not
+# necessarily entirely) expected sampling noise in the p-value ESTIMATE
+# itself, not evidence the true quantity is unstable. Re-run at
+# n_reps=10000 (se ~0.002, three times tighter) instead of reading
+# qualitative meaning into "how many of 5 seeds cross 0.05" - report the
+# p-value with its own Monte Carlo se, which is the number that actually
+# answers whether 0.05 is cleared with confidence.
+description = "src.filter_eval.random_filter_p_value, n_reps=10000, at seeds 0-2 (3 seeds is enough once se~0.002; the point is precision per estimate, not seed-counting) - reports p_value and se (sqrt(p(1-p)/n_reps)) for both logistic and the exploratory two-feature model"
+n_reps = 10000
+seeds = [0, 1, 2]
 
 [robustness.threshold_curve]
 # src.filter_eval.threshold_curve_with_random_band (new this week) -

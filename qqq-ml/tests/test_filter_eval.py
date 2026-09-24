@@ -234,6 +234,8 @@ def test_random_filter_p_value_matches_manual_rank(orb, preds):
     assert out["observed_sharpe"] == pytest.approx(observed)
     assert out["p_value"] == pytest.approx(manual_p)
     assert out["rank_from_top"] == int(np.sum(null >= observed)) + 1
+    manual_se = (manual_p * (1 - manual_p) / len(null)) ** 0.5
+    assert out["se"] == pytest.approx(manual_se)
 
 
 # ------------------------------------------------------- yearly/fold breakdown

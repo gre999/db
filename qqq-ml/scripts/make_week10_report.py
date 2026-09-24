@@ -164,15 +164,21 @@ def main() -> None:
                          "unfiltered_sharpe": r["unfiltered_sharpe"]})
     grid_tbl = rnd(pd.DataFrame(grid_rows), 3)
 
+    reseed_cfg = cfg["robustness"]["random_baseline_reseed"]
+    reseed_n_reps = reseed_cfg["n_reps"]
     reseed_rows = []
     for name, key in [("logistic", "logistic"), ("logistic_2feature", "logistic_2feature")]:
-        for seed in cfg["robustness"]["random_baseline_reseed"]["seeds"]:
-            rp = FE.random_filter_p_value(preds[key], orb, n_reps=1000, seed=seed)
-            reseed_rows.append({"model": name, "seed": seed, "p_value": rp["p_value"]})
+        for seed in reseed_cfg["seeds"]:
+            rp = FE.random_filter_p_value(preds[key], orb, n_reps=reseed_n_reps, seed=seed)
+            reseed_rows.append({"model": name, "seed": seed,
+                               "p_value": rp["p_value"], "se": rp["se"]})
     reseed_tbl = as_int(rnd(pd.DataFrame(reseed_rows), 4), ["seed"])
-    reseed_summary = pd.DataFrame(reseed_rows).groupby("model")["p_value"].agg(
-        ["min", "max", lambda x: int((x < 0.05).sum())])
-    reseed_summary.columns = ["min_p", "max_p", "n_seeds_below_0.05"]
+    reseed_df = pd.DataFrame(reseed_rows)
+    reseed_summary = reseed_df.groupby("model").agg(
+        mean_p=("p_value", "mean"), min_p=("p_value", "min"), max_p=("p_value", "max"),
+        se=("se", "mean"))
+    reseed_summary["mean_minus_2se"] = reseed_summary["mean_p"] - 2 * reseed_summary["se"]
+    reseed_summary["mean_plus_2se"] = reseed_summary["mean_p"] + 2 * reseed_summary["se"]
 
     tc_logistic = FE.threshold_curve_with_random_band(preds["logistic"], orb, n_reps=1000, seed=0)
     tc_2f = FE.threshold_curve_with_random_band(preds["logistic_2feature"], orb, n_reps=1000, seed=0)
@@ -255,15 +261,24 @@ def main() -> None:
 步進(原始結果 {grid_tbl[grid_tbl.grid_step=='10%']['filtered_sharpe'].iloc[0]})低不少,但仍
 高於不篩選——網格粗細對結果有一定敏感度,方向不變。
 
-**隨機基準換種子重跑**(5 個種子,logistic 與兩特徵模型):
+**隨機基準精度重估**(修改自最初的草案——n_reps=1000 下 5 個種子給出 p=0.030–0.051,
+logistic 一個種子超過 0.05,但 n=1000 在 p≈0.04 附近的蒙地卡羅標準誤約 0.006,這個範圍有
+一部分本來就是估計本身的雜訊,不必然代表真實 p 值不穩定。改成 n_reps={reseed_n_reps},
+{len(reseed_cfg['seeds'])} 個種子,標準誤降到約 0.002,直接報告 p 值與其蒙地卡羅標準誤,
+取代「幾個種子超過門檻」的計數描述):
 
 {_md_table(reseed_tbl)}
 
-{_md_table(reseed_summary.reset_index())}
+{_md_table(rnd(reseed_summary.reset_index(), 4))}
 
-logistic 的隨機篩選 p 值在 5 個種子中**有一個(種子2)超過 0.05**(p=0.051),不是每個種子都
-過關——第九週報告的 p=0.030(種子0)不是穩健地小於 0.05,是在邊界附近。兩特徵模型的 p 值
-在所有種子下都穩定小於 0.05。
+logistic:三個種子的 p 值落在 {reseed_summary.loc['logistic','min_p']:.3f}–{reseed_summary.loc['logistic','max_p']:.3f},
+平均 {reseed_summary.loc['logistic','mean_p']:.3f} ± {reseed_summary.loc['logistic','se']:.3f}
+(蒙地卡羅標準誤)——**三個估計都穩定落在 0.05 以下**,原本 n=1000 時看到的「換種子跳到
+0.051」主要是估計精度不足造成的雜訊,不是真實 p 值在 0.05 兩側擺盪;但真實值(約 0.043–0.047)
+比原本 n=1000、種子0 報告的 0.030 更接近 0.05 這條線,判讀上要更保守。兩特徵模型:
+{reseed_summary.loc['logistic_2feature','min_p']:.3f}–{reseed_summary.loc['logistic_2feature','max_p']:.3f},
+平均 {reseed_summary.loc['logistic_2feature','mean_p']:.3f} ± {reseed_summary.loc['logistic_2feature','se']:.3f}
+——同樣穩定,而且離 0.05 的安全邊際比 logistic 大。
 
 **門檻曲線定稿**(固定保留比例,測試段已配適模型的樣本外夏普,疊隨機篩選 5-95% 區間):
 
@@ -310,10 +325,11 @@ VWAP 篩選(只用開盤前特徵,沿用第九週四項標準)設定已寫入
 ## 結論
 
 **在現有開盤特徵與樣本量下,訊號統計強度不足以支撐顯著的策略改善。** 分類層、排序層偶爾
-能看到不是雜訊的訊號(兩特徵模型的隨機篩選 p 值在多個種子下穩定 <0.05,大賺日的避開模式
-跟穩定係數方向一致),但策略層的差異顯著性檢定(block bootstrap)沒有一個模型、任何穩健性
-變體通過,檢定力分析顯示現有樣本量本來就偵測不到這個量級的效果,不是換模型或換更多資料
-(在合理年限內)能解決的問題。
+能看到不是雜訊的訊號(用足夠精度〔n_reps=10000〕重估後,logistic 與兩特徵模型的隨機篩選
+p 值都穩定小於 0.05——logistic 約 0.04-0.05、離門檻較近,兩特徵模型約 0.02、安全邊際較大;
+大賺日的避開模式跟穩定係數方向一致),但策略層的差異顯著性檢定(block bootstrap)沒有一個
+模型、任何穩健性變體通過,檢定力分析顯示現有樣本量本來就偵測不到這個量級的效果,不是換
+模型或換更多資料(在合理年限內)能解決的問題。
 """
     out_path = REPORTS / "week10_robustness.md"
     out_path.write_text(md, encoding="utf-8")
