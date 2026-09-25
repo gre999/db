@@ -165,6 +165,33 @@ def _validation_score(bps_full: pd.Series, kept_dates: pd.DatetimeIndex,
     return sharpe, len(kept_dates) / n_years
 
 
+def select_threshold_posthoc(val_score: pd.Series, val_signal_dates: pd.DatetimeIndex,
+                             bps_val_full: pd.Series, retention_grid=RETENTION_GRID,
+                             min_trades_per_year: int = MIN_TRADES_PER_YEAR) -> dict:
+    """The retention-grid threshold search from :func:`_fit_fold`'s inner
+    loop, extracted as a standalone function: picks a threshold from an
+    ALREADY-COMPUTED validation-window score series, for scores that come
+    from a model fit outside this module entirely (week 12,
+    config/week12_dl.toml [strategy_layer]: the CNN and stacking scores)
+    - never refits anything, only chooses a keep/drop cutoff, exactly like
+    every model this module fits does for its own scores."""
+    best = None
+    for retention in retention_grid:
+        threshold = float(val_score.quantile(1 - retention))
+        kept = val_signal_dates[val_score >= threshold]
+        sharpe, tpy = _validation_score(bps_val_full, kept,
+                                        val_signal_dates, min_trades_per_year)
+        if tpy < min_trades_per_year:
+            continue
+        if best is None or sharpe > best["sharpe"] or \
+                (sharpe == best["sharpe"] and retention > best["retention"]):
+            best = {"retention": retention, "threshold": threshold, "sharpe": sharpe}
+    if best is None:      # shouldn't happen (100% always qualifies if
+        best = {"retention": 1.0,   # ORB itself clears the bar), but
+                "threshold": float(val_score.min()), "sharpe": np.nan}
+    return best
+
+
 def _prep_xy(X: pd.DataFrame, orb: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     s = orb.set_index("day") if "day" in orb.columns else orb
     labels = build_labels(s)
@@ -201,25 +228,9 @@ def _fit_fold(Xy: pd.DataFrame, cols: list[str], f, s: pd.DataFrame,
     model.fit(fit_rows[cols], fit_rows[y_col])
 
     val_score = pd.Series(_score(model, val_rows[cols]), index=val_rows.index)
-    val_signal_dates = val_rows.index
     bps_val_full = s["bps_return"].reindex(val_dates).fillna(0.0)
-
-    best = None
-    for retention in retention_grid:
-        threshold = float(val_score.quantile(1 - retention))
-        kept = val_signal_dates[val_score >= threshold]
-        sharpe, tpy = _validation_score(bps_val_full, kept,
-                                        val_signal_dates,
-                                        min_trades_per_year)
-        if tpy < min_trades_per_year:
-            continue
-        if best is None or sharpe > best["sharpe"] or \
-                (sharpe == best["sharpe"] and retention > best["retention"]):
-            best = {"retention": retention, "threshold": threshold,
-                   "sharpe": sharpe}
-    if best is None:      # shouldn't happen (100% always qualifies if
-        best = {"retention": 1.0,   # ORB itself clears the bar), but
-                "threshold": float(val_score.min()), "sharpe": np.nan}
+    best = select_threshold_posthoc(val_score, val_rows.index, bps_val_full,
+                                    retention_grid, min_trades_per_year)
 
     test_rows = Xy.loc[Xy.index.isin(test_dates)]
     return model, best, fit_rows, test_rows

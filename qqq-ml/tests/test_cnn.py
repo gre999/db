@@ -70,6 +70,25 @@ def test_fit_predict_fold_output_schema_and_averaging():
     assert np.allclose(preds["y_pred_proba"].to_numpy(), manual_mean)
 
 
+def test_fit_predict_fold_reports_fit_val_auc_epochs_and_val_preds():
+    tensor, days, y = _make_sequence_data(n_days=900)
+    splitter = WalkForwardSplit(train_years=2, test_years=1, step_years=1,
+                                first_test_start="2017-06-01")
+    f = next(iter(splitter.folds(days)))
+    out = CNN.fit_predict_fold(tensor, days, y, f, validation_years=1,
+                               seeds=(0, 1, 2), **FAST)
+
+    assert len(out["epochs_per_seed"]) == 3
+    assert all(0 <= e < FAST["max_epochs"] for e in out["epochs_per_seed"])
+    for k in ("fit_auc_mean_proba", "val_auc_mean_proba", "test_auc_mean_proba"):
+        assert 0.0 <= out[k] <= 1.0
+
+    val_preds = out["val_preds"]
+    assert len(val_preds) == len(out["X_val"])
+    manual_val_mean = np.mean([CNN.predict_proba(m, out["X_val"]) for m in out["models"]], axis=0)
+    assert np.allclose(val_preds["y_pred_proba"].to_numpy(), manual_val_mean)
+
+
 def test_overfit_tiny_batch_check_passes_on_separable_data():
     tensor, days, y = _make_sequence_data(seed=3, n_days=300)
     X, yv = tensor, y.to_numpy()

@@ -145,6 +145,11 @@ def test_task_b_labels_direction_and_net_bps_match_manual_calc(minute):
     assert labels.loc[day, "net_bps"] == pytest.approx(manual_net)
     assert labels.loc[day, "label"] == int(raw_bps > 0)
     assert labels.loc[day, "net_bps"] > 0   # every retained row must clear cost
+    assert labels.loc[day, "raw_bps"] == pytest.approx(raw_bps)
+    assert labels.loc[day, "cost_bps"] == pytest.approx(cost_bps)
+    # net_bps is always the BEST-CASE (correct-direction) return
+    assert labels.loc[day, "net_bps"] == pytest.approx(
+        abs(labels.loc[day, "raw_bps"]) - labels.loc[day, "cost_bps"])
 
 
 def test_task_b_labels_excludes_subcost_days():

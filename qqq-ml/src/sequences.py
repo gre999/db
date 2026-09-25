@@ -122,6 +122,13 @@ def build_task_b_labels(minute: pd.DataFrame, n_minutes: int,
     directions is only possible when ``abs(raw_bps) <= cost_bps``) - the
     same "nothing to decide" treatment as ORB's own doji days
     (config/week08_filter.toml [label]), not coded as a negative label.
+
+    Also returns the SIGNED ``raw_bps`` and ``cost_bps`` separately
+    (week 12, config/week12_dl.toml [strategy_layer.task_b]) so a
+    descriptive strategy return can be computed for ANY predicted
+    direction (``pred_dir * raw_bps - cost_bps``), not just the label's
+    own "best-case direction" (``net_bps`` is ``abs(raw_bps) - cost_bps``
+    by construction, i.e. only the best-case number).
     """
     cost_bps_per_share = cost_per_share  # applied in bps terms below
     rows = []
@@ -139,10 +146,12 @@ def build_task_b_labels(minute: pd.DataFrame, n_minutes: int,
         if net_bps <= 0:
             continue
         rows.append({"day": day, "label": int(raw_bps > 0), "net_bps": net_bps,
+                    "raw_bps": raw_bps, "cost_bps": cost_bps,
                     "entry_time": g["ts"].iloc[n_minutes],
                     "exit_time": g["bar_end"].iloc[-1]})
     if not rows:
-        return pd.DataFrame(columns=["day", "label", "net_bps", "entry_time",
+        return pd.DataFrame(columns=["day", "label", "net_bps", "raw_bps",
+                                     "cost_bps", "entry_time",
                                      "exit_time"]).set_index("day")
     return pd.DataFrame(rows).set_index("day")
 

@@ -1,0 +1,122 @@
+# Week 12 (phase 5, week 2) config for the CNN's full walk-forward and
+# the incremental-information check. Fixed BEFORE running the full
+# walk-forward - see reports/week12_dl_walkforward.md section 1 for the
+# confirmation. Results are reported as they come out, good or bad.
+
+[inherited_from_week11]
+# Everything about the CNN itself is frozen exactly as week 11 left it -
+# architecture (Conv1d(4->16,k3)->ReLU->Conv1d(16->32,k3)->ReLU->
+# AdaptiveAvgPool1d->Dropout(0.3)->Linear(32->1), 1809 params), training
+# (class-weighted BCEWithLogitsLoss, Adam lr=1e-3, batch_size=32,
+# max_epochs=100, early stopping patience=10 on validation-window loss),
+# and the 5-fixed-seed averaging (seeds 0-4, mean probability). Any
+# architecture/hyperparameter VARIANT tried this week is exploratory only
+# and reported separately, never substituted as the main result -
+# this week answers "does the frozen week-11 design generalize across
+# folds", not "can we tune it better".
+carries_over = true
+
+[primary_comparison]
+# Task A only, main success question.
+metric = "CNN's test-fold AUC minus week 8's hand-feature logistic's test-fold AUC"
+pooling = "PRIMARY: all 9 folds' test-fold days concatenated into one day-indexed series before the AUC/bootstrap - not 9 separate per-fold tests - matching how every prior week's block-bootstrap comparisons pool the full OOS window. REFERENCE (amended before running): the mean of the 9 folds' own individually-computed AUCs is also reported alongside - per-fold calibration can differ fold to fold, which affects a pooled AUC (it implicitly assumes scores are comparable across folds) but not a simple average of already-computed per-fold AUCs, so the two are worth showing side by side rather than only reporting the pooled number."
+test = "src.dl_eval.block_bootstrap_auc_diff, block_size=20, n_boot=2000, seed=0"
+significance_threshold = 0.05
+
+[secondary_comparison]
+# Task A only.
+name = "incremental_information_check"
+description = "does the CNN's score carry information the hand-crafted features (config/week08_filter.toml OPEN_FEATURE_COLUMNS) don't already have - see [incremental_info] below for the three sub-checks"
+timing_note = """
+this check was suggested by looking at week 11's single-fold result (the
+CNN's AUC was close to the best flattened baseline there), but its exact
+method, data split, and interpretation rules are all fixed here, BEFORE
+the full walk-forward - and none of it feeds back into adjusting the CNN
+itself (no architecture/hyperparameter change is made in response to
+this check's outcome, this week or any other). This is why it's
+described as "proposed after looking at one fold, decided before the
+full run" rather than treated as a post-hoc, results-driven test.
+"""
+
+[task_b_comparison]
+models = ["cnn_n15", "cnn_n30"]
+metric = "each N's CNN test-fold AUC minus that N's best flattened baseline (logistic_l2 or xgboost, whichever is higher for that N) - pooled across all 9 folds (same primary/reference distinction as [primary_comparison].pooling: pooled AUC is the main number, mean-of-per-fold-AUCs reported alongside)"
+test = "src.dl_eval.block_bootstrap_auc_diff per N (on the pooled series), then Holm-Bonferroni correction across the family of 2 (N=15, N=30) - same procedure as config/week09_filter.toml's random_forest/xgboost Holm family"
+
+[interpretation_rules]
+# Written here before running anything, exactly as discussed:
+rule_1 = "AUC close (CNN vs hand-feature logistic, primary comparison not significant) AND R² high (secondary check 2 below) AND stacking shows no significant improvement (secondary check 3) -> CNN reconstructs the hand-crafted features, no incremental information"
+rule_2 = "stacking shows a significant improvement over hand-feature-logistic-alone (block bootstrap p<0.05) AND the CNN coefficient in the stacking model is same-signed across folds -> CNN carries incremental information"
+rule_3 = "CNN clearly beats hand-feature logistic (primary comparison significant, large positive gap) -> check overfitting/leakage FIRST (fit-vs-test AUC gap, second shuffled-label check), same rule as week 11's config, not treated as a positive result until those checks are clean"
+
+[walkforward]
+# Amended after running (not a plan change, a factual correction): the
+# sequence datasets' 20-trading-day trailing-volume-history requirement
+# (src.sequences.same_minute_volume_history) delays their usable start to
+# 2015-01-22 (vs ORB's raw 2014-12-22), which pushes WalkForwardSplit's
+# default first_test_start from 2018-01-01 to 2019-01-02 - one whole
+# calendar-year fold shorter than every prior week's 9-fold ORB walk-
+# forward. All three tasks (A, B15, B30) get 8 folds (test years
+# 2019-2026, the last one partial through 2026-09-22), not 9 - this
+# was wrong in the pre-registered draft above and is corrected here
+# with the reason, not silently.
+folds = 8
+seeds = [0, 1, 2, 3, 4]
+per_fold_report = ["fit_auc", "val_auc", "test_auc (mean-of-5-seeds probability)",
+                   "early_stopping_epoch (per seed)", "test_auc_per_seed (min-max range)"]
+overfitting_comparison = "fit_auc - test_auc per fold, compared against week 9's tree-model range (random forest 0.207, XGBoost depth-2 0.310, XGBoost depth-3 0.373 - reports/week09_filter_trees.md section 3) - context for whether the CNN overfits less, comparably, or more than the trees did on the same kind of small per-fold sample"
+second_shuffled_label_check = "same procedure as week 11 (config/week11_dl.toml [cnn.sanity_checks].shuffled_label_auc), run on the LAST fold (most different from week 11's first-fold check, and the fold with the most cumulative training history) instead of the first"
+
+[incremental_info]
+# Task A only, all three computed on already-fitted/already-frozen models
+# - none of this refits the CNN or the hand-feature logistic.
+spearman_features = ["open5m_body_ratio", "open5m_direction", "open5m_range_rel", "har_logrv_1d"]
+spearman_method = "per fold, test-fold CNN mean-probability vs each named feature's own test-fold value - Spearman is rank-based, so using probability vs the pre-sigmoid logit gives identical correlations (monotonic transform), probability is reported for readability"
+
+[incremental_info.r_squared]
+description = "OLS regression of the CNN's score (logit of the mean-of-5-seeds test-fold probability) on all 14 of config/week08_filter.toml's OPEN_FEATURE_COLUMNS (not just the 4 Spearman features above) - answers 'how much of the CNN's OUTPUT is already a linear function of known features', a different question from the Spearman check's per-feature relationships"
+pooling = """
+amended before running: NOT pooled into one regression by default - each
+fold's CNN is a separately-trained model (different weights) and its
+logit scale/calibration can differ fold to fold, so a naive pool would
+let one fold's scale dominate or distort the fit. Two versions instead:
+  primary: one OLS per fold (9 regressions, ~250 rows each) - report
+    each fold's R² and adjusted R², plus their mean across folds.
+  supplementary: z-score each fold's CNN logit WITHIN that fold first
+    (removes the fold-to-fold scale/calibration difference), then pool
+    all 9 folds' standardized-logit rows into one combined regression -
+    report that R² and adjusted R² too.
+"""
+high_threshold = 0.6           # informal threshold for "R² high" in rule_1 above - not a formal test, a descriptive read
+
+[incremental_info.stacking]
+# The core incremental-information test.
+inputs = "2 features, BOTH ON THE LOGIT SCALE (amended before running): logit of the hand-feature logistic's own predicted probability, and logit of the CNN's mean-of-5-seeds predicted probability - logits are the natural linear-predictor scale for a second-stage logistic regression (unbounded, not compressed near 0/1 the way raw probabilities are), and matches [incremental_info.r_squared]'s use of the CNN logit rather than probability"
+fit_window = "the VALIDATION window ONLY (never the model-fit window) - amended/clarified before running: the CNN's own probabilities on ITS OWN model-fit window are in-sample for the CNN (it was trained on exactly that data, so those probabilities are artificially confident/overfit relative to genuinely out-of-sample performance) - the validation window is the first window where the CNN's own output is a fair, OOS-for-the-CNN reading, so it's the only valid window to train a second-stage model on top of it"
+stacking_model = "unregularized logistic regression (sklearn LogisticRegression(penalty=None) - an explicit choice, not sklearn's regularized default, so the coefficient significance test below is a valid classical MLE Wald test, not biased by L2 shrinkage)"
+applied_to = "test window only, never refit"
+comparison = "stacked model's test-fold AUC minus hand-feature-logistic-alone's test-fold AUC, same block_bootstrap_auc_diff procedure as the primary comparison, pooled across all 9 folds"
+coefficient_significance = """
+per fold, Wald test on the stacking model's CNN coefficient: asymptotic
+covariance (X'WX)^-1 where W = diag(p_i(1-p_i)) at the fitted
+probabilities (the standard MLE logistic-regression formula, computed by
+hand in src/models/stacking.py - main code has no runtime dependency on
+an external inference package). Cross-checked (not just trusted) in
+tests/test_stacking.py: on synthetic data, the hand-rolled coefficients
+and standard errors must match statsmodels.api.Logit's to numerical
+precision - statsmodels is dev/test-only (requirements-dev.txt), not a
+project dependency.
+"""
+
+[strategy_layer]
+# Descriptive only - not a success criterion (see config/week11_dl.toml
+# [primary_comparison].strategy_layer's already-stated power-analysis
+# caveat, repeated here for this week's own numbers):
+task_a_models = ["cnn", "stacking"]
+procedure = "reuse config/week08_filter.toml's threshold-selection machinery as a POST-HOC filter on the already-frozen CNN/stacking scores (src.models.filter._validation_score's retention-grid search, unchanged) - never refits CNN or the stacking model, only picks a keep/drop threshold from each fold's validation-window scores, exactly like week 8's logistic did for its own scores"
+metrics = ["sharpe", "max_drawdown", "random_filter_null p-value (n_reps=10000, per week 10's Monte-Carlo-precision correction - reports/week10_robustness.md section 3)", "block_bootstrap_significance p-value"]
+power_context = "week 10's minimum detectable Sharpe difference (~0.69-0.70 at 5%/80%, reports/week10_robustness.md section 2) is restated alongside these numbers - the same sample-size limitation applies verbatim, switching to a CNN doesn't change how many trading days exist per year"
+
+[strategy_layer.task_b]
+description = "enter at 09:30+N in the model's predicted direction (prob>=0.5 -> long, else short), flatten at the close - src.sequences.build_task_b_labels's own net-of-cost bps convention (amended: now also stores signed raw_bps and cost_bps per day so this descriptive strategy return can be computed for ANY predicted direction, not just the label's own 'best-case direction')"
+metrics = ["sharpe", "max_drawdown"]

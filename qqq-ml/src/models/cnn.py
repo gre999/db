@@ -80,9 +80,13 @@ def _pos_weight(y: np.ndarray) -> torch.Tensor:
 def train_one_seed(X_fit: np.ndarray, y_fit: np.ndarray, X_val: np.ndarray,
                    y_val: np.ndarray, seed: int, max_epochs: int = MAX_EPOCHS,
                    patience: int = PATIENCE, batch_size: int = BATCH_SIZE,
-                   lr: float = LR, dropout: float = 0.3) -> SmallCNN:
+                   lr: float = LR, dropout: float = 0.3,
+                   return_epoch: bool = False):
     """Fits one seed, early-stopped on validation-window loss. Deterministic
-    given ``seed`` (torch.manual_seed + use_deterministic_algorithms)."""
+    given ``seed`` (torch.manual_seed + use_deterministic_algorithms). If
+    ``return_epoch``, returns ``(model, best_epoch)`` instead of just
+    ``model`` (best_epoch is the 0-indexed epoch whose validation loss was
+    lowest - what early stopping actually rolled back to)."""
     torch.manual_seed(seed)
     torch.use_deterministic_algorithms(True)
     model = SmallCNN(dropout=dropout)
@@ -96,9 +100,9 @@ def train_one_seed(X_fit: np.ndarray, y_fit: np.ndarray, X_val: np.ndarray,
 
     n = len(Xfit_t)
     gen = torch.Generator().manual_seed(seed)
-    best_val_loss, best_state, no_improve = float("inf"), None, 0
+    best_val_loss, best_state, best_epoch, no_improve = float("inf"), None, 0, 0
 
-    for _epoch in range(max_epochs):
+    for epoch in range(max_epochs):
         model.train()
         perm = torch.randperm(n, generator=gen)
         for i in range(0, n, batch_size):
@@ -114,6 +118,7 @@ def train_one_seed(X_fit: np.ndarray, y_fit: np.ndarray, X_val: np.ndarray,
         if val_loss < best_val_loss - 1e-6:
             best_val_loss = val_loss
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            best_epoch = epoch
             no_improve = 0
         else:
             no_improve += 1
@@ -121,7 +126,7 @@ def train_one_seed(X_fit: np.ndarray, y_fit: np.ndarray, X_val: np.ndarray,
                 break
     if best_state is not None:
         model.load_state_dict(best_state)
-    return model
+    return (model, best_epoch) if return_epoch else model
 
 
 def predict_proba(model: SmallCNN, X: np.ndarray) -> np.ndarray:
@@ -151,23 +156,41 @@ def fit_predict_fold(tensor: np.ndarray, days: pd.DatetimeIndex, y: pd.Series, f
     X_val, y_val = std_tensor[val_mask], y.to_numpy()[val_mask]
     X_test, y_test = std_tensor[test_mask], y.to_numpy()[test_mask]
 
-    test_probas, models = [], []
+    test_probas, val_probas, fit_probas, models, epochs = [], [], [], [], []
     for seed in seeds:
-        model = train_one_seed(X_fit, y_fit, X_val, y_val, seed, **train_kwargs)
+        model, epoch = train_one_seed(X_fit, y_fit, X_val, y_val, seed,
+                                      return_epoch=True, **train_kwargs)
         models.append(model)
+        epochs.append(epoch)
         test_probas.append(predict_proba(model, X_test))
+        val_probas.append(predict_proba(model, X_val))
+        fit_probas.append(predict_proba(model, X_fit))
     test_probas = np.stack(test_probas)          # (n_seeds, n_test)
-    mean_proba = test_probas.mean(axis=0)
+    val_probas = np.stack(val_probas)
+    fit_probas = np.stack(fit_probas)
+    mean_test_proba = test_probas.mean(axis=0)
+    mean_val_proba = val_probas.mean(axis=0)
+    mean_fit_proba = fit_probas.mean(axis=0)
 
-    test_auc_per_seed = [float(roc_auc_score(y_test, p)) for p in test_probas] \
-        if len(np.unique(y_test)) > 1 else [np.nan] * len(seeds)
-    mean_auc = float(roc_auc_score(y_test, mean_proba)) if len(np.unique(y_test)) > 1 else np.nan
+    def _auc(yy, pp):
+        return float(roc_auc_score(yy, pp)) if len(np.unique(yy)) > 1 else np.nan
+
+    test_auc_per_seed = [_auc(y_test, p) for p in test_probas]
+    mean_test_auc = _auc(y_test, mean_test_proba)
+    mean_val_auc = _auc(y_val, mean_val_proba)
+    mean_fit_auc = _auc(y_fit, mean_fit_proba)
 
     preds = pd.DataFrame({"date": test_dates, "fold": f.number, "model": "cnn",
                          "target": "cnn_task", "y_true": y_test.astype(int),
-                         "y_pred_proba": mean_proba})
-    return {"preds": preds, "test_auc_mean_proba": mean_auc,
-           "test_auc_per_seed": test_auc_per_seed, "models": models,
+                         "y_pred_proba": mean_test_proba})
+    val_preds = pd.DataFrame({"date": val_dates, "fold": f.number, "model": "cnn",
+                             "target": "cnn_task", "y_true": y_val.astype(int),
+                             "y_pred_proba": mean_val_proba})
+    return {"preds": preds, "val_preds": val_preds,
+           "test_auc_mean_proba": mean_test_auc, "val_auc_mean_proba": mean_val_auc,
+           "fit_auc_mean_proba": mean_fit_auc,
+           "test_auc_per_seed": test_auc_per_seed, "epochs_per_seed": epochs,
+           "models": models,
            "X_fit": X_fit, "y_fit": y_fit, "X_val": X_val, "y_val": y_val,
            "X_test": X_test, "y_test": y_test}
 

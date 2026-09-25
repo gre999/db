@@ -1,0 +1,6 @@
+# Dev/test-only dependencies - never imported by anything under src/.
+-r requirements.txt
+statsmodels>=0.15  # week 12: cross-checks the hand-rolled logistic Wald test
+                   # (tests/test_stacking.py) against statsmodels.Logit;
+                   # src/models/stacking.py implements the test itself so
+                   # main code has no runtime dependency on this package.
