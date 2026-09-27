@@ -141,6 +141,19 @@ def test_block_bootstrap_sharpe_diff_dist_matches_the_p_value_function():
     assert manual_p == pytest.approx(p)
 
 
+def test_arithmetic_sharpe_matches_block_bootstrap_diff_and_manual_formula():
+    rng = np.random.default_rng(5)
+    n = 600
+    a = pd.Series(rng.normal(0.0006, 0.01, n))
+    b = pd.Series(rng.normal(0.0002, 0.01, n))
+
+    manual_a = float(a.mean() / a.std(ddof=0) * np.sqrt(252))
+    assert B.arithmetic_sharpe(a) == pytest.approx(manual_a)
+
+    obs, _ = B.block_bootstrap_sharpe_diff(a, b, block_size=20, n_boot=200, seed=0)
+    assert B.arithmetic_sharpe(a) - B.arithmetic_sharpe(b) == pytest.approx(obs)
+
+
 def test_regress_weight_diff_on_return_detects_return_timing():
     """A weight difference that's genuinely aligned with the return it earns
     (return timing) must come back with a significant positive slope close

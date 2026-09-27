@@ -1,7 +1,58 @@
 {
   "_cross_check_notes": [
-    "「sharpe」欄位(顯示值)用複利/幾何年化報酬(BT.evaluate / E._daily_eval,equity[-1]**(252/n)-1,全專案自第5週起headline數字都用這個定義);「diff」/「p_value」/「mde」欄位用算術平均年化Sharpe(BT._sharpe,block_bootstrap_sharpe_diff內部定義,mean/std*sqrt(252))。兩者不是同一個公式,「diff」字面上不會剛好等於兩個「sharpe」相減——這不是這次新產生的不一致,是第5週就已經存在、貫穿全專案(週5/8/9/10/12)的既有設計:headline數字用複利口徑,顯著性檢定用算術口徑(重抽樣3000-5000次時算術Sharpe計算成本低、統計性質更單純)。本檔案逐一核對到週5(1.1375/-0.0026/0.9173/-0.0161/0.8517全部吻合)、週7(HMM ORB 0.2/0.35/-0.188,VWAP 0.893/1.011/-0.213,全部吻合)、週8/10、週12的原始報告數字,顯示層(sharpe/max_drawdown)逐一對上,只有diff/p/mde是本週(第13週)才按同一套方法補算或重算,不是原報告既有的數字。",
+    "改用算術平均年化Sharpe(mean/std*sqrt(252),BT.arithmetic_sharpe)當「sharpe」/「unfiltered_sharpe」/「diff」欄位的主要定義,跟block bootstrap顯著性檢定、最小可偵測差(mde)用的是同一個定義,所以表中兩個sharpe相減就等於diff,不需要另外換算。「sharpe_compounding」/「unfiltered_sharpe_compounding」/「diff_compounding」是複利/幾何年化報酬版本(BT.evaluate/E._daily_eval,equity[-1]**(252/n)-1),對照用——**各週報告本身顯示的都是複利版本,這裡沒有改各週報告,只有這份程式產生的總表換了主要口徑**,方法論說明見final_outline.md。",
+    "方向檢查(誰高誰低,算術版 vs 複利版):6 個策略層比較全部檢查過,0 個方向不同(無)——見 _direction_check 欄位逐列比較。",
     "階段二 primary/secondary 兩列的 QLIKE 用不同目標變數(y_true_var vs rv_on)計算,見各列自己的 cross_check_note,不能跨列比較。"
+  ],
+  "_direction_check": [
+    {
+      "phase": "phase2",
+      "row": "primary",
+      "label": "HAR+殘差XGB vs HAR",
+      "diff_arithmetic": -0.0025998316877138272,
+      "diff_compounding": -0.0030222271102673393,
+      "direction_match": true
+    },
+    {
+      "phase": "phase2",
+      "row": "secondary",
+      "label": "HAR+殘差XGB vs 20日歷史波動",
+      "diff_arithmetic": -0.016104525843169792,
+      "diff_compounding": -0.01925467375321821,
+      "direction_match": true
+    },
+    {
+      "phase": "phase3",
+      "row": "orb",
+      "label": "HMM 狀態篩選 ORB vs 不篩選",
+      "diff_arithmetic": -0.15661439807721028,
+      "diff_compounding": -0.1501750036275061,
+      "direction_match": true
+    },
+    {
+      "phase": "phase3",
+      "row": "vwap",
+      "label": "HMM 狀態篩選 VWAP vs 不篩選",
+      "diff_arithmetic": -0.10256225213890613,
+      "diff_compounding": -0.11780287711789095,
+      "direction_match": true
+    },
+    {
+      "phase": "phase4",
+      "row": "primary",
+      "label": "logistic 篩選 ORB vs 不篩選",
+      "diff_arithmetic": 0.1714045623774596,
+      "diff_compounding": 0.19026069678243962,
+      "direction_match": true
+    },
+    {
+      "phase": "phase5",
+      "row": "primary",
+      "label": "CNN vs 手工特徵 logistic (task A)",
+      "diff_arithmetic": -0.19973546048645835,
+      "diff_compounding": -0.18942772562434243,
+      "direction_match": true
+    }
   ],
   "phase2": {
     "weeks": [
@@ -24,9 +75,14 @@
           "cross_check_note": "此列QLIKE跟下面secondary列的QLIKE數字不能直接比較:這列的目標變數是y_true_var(RTH-only已實現變異數,week3/4預測檔本身的定義),secondary列的目標變數是week5 backtest層的rv_on(=rv+隔夜報酬平方,收盤到收盤變異數)。查過src/strategies.py的scale_ratios/cc_variance_forecast docstring,確認是目標變數定義不同,不是計算錯誤。"
         },
         "strategy_layer": {
-          "sharpe": 1.1375006781865848,
+          "sharpe": 1.1256535791296927,
+          "sharpe_compounding": 1.1375006781865848,
+          "unfiltered_sharpe": 1.1282534108174065,
+          "unfiltered_sharpe_compounding": 1.1405229052968522,
           "max_drawdown": -0.24470247025604963,
           "diff": -0.0025998316877138272,
+          "diff_compounding": -0.0030222271102673393,
+          "direction_match": true,
           "p_value": 0.9173333333333333,
           "mde": 0.06862805674590372,
           "mde_note": "事後補算,僅供判讀,不改變原結論(week5未算MDE)"
@@ -43,9 +99,14 @@
           "note": "hist20不是walk-forward預測模型(用當天自己的滾動已實現變異數當預測),不適用DM檢定架構,只報點估計,無p值"
         },
         "strategy_layer": {
-          "sharpe": 1.1375006781865848,
+          "sharpe": 1.1256535791296927,
+          "sharpe_compounding": 1.1375006781865848,
+          "unfiltered_sharpe": 1.1417581049728625,
+          "unfiltered_sharpe_compounding": 1.156755351939803,
           "max_drawdown": -0.24470247025604963,
           "diff": -0.016104525843169792,
+          "diff_compounding": -0.01925467375321821,
+          "direction_match": true,
           "p_value": 0.8516666666666667,
           "mde": 0.23753316691521864,
           "mde_note": "事後補算,僅供判讀,不改變原結論(week5未算MDE)"
@@ -86,9 +147,14 @@
           ]
         },
         "strategy_layer": {
-          "sharpe": 0.20009269471868826,
+          "sharpe": 0.23900008761437858,
+          "sharpe_compounding": 0.20009269471868826,
+          "unfiltered_sharpe": 0.39561448569158886,
+          "unfiltered_sharpe_compounding": 0.35026769834619437,
           "max_drawdown": -0.18834479587077135,
           "diff": -0.15661439807721028,
+          "diff_compounding": -0.1501750036275061,
+          "direction_match": true,
           "p_value": 0.57,
           "mde": 0.7864258470473808,
           "mde_note": "事後補算,僅供判讀,不改變原結論(week6-7未算MDE)"
@@ -121,9 +187,14 @@
           ]
         },
         "strategy_layer": {
-          "sharpe": 0.8931356899120537,
+          "sharpe": 0.9165532653657179,
+          "sharpe_compounding": 0.8931356899120537,
+          "unfiltered_sharpe": 1.019115517504624,
+          "unfiltered_sharpe_compounding": 1.0109385670299447,
           "max_drawdown": -0.21287534699578803,
           "diff": -0.10256225213890613,
+          "diff_compounding": -0.11780287711789095,
+          "direction_match": true,
           "p_value": 0.44066666666666665,
           "mde": 0.3722867163606097,
           "mde_note": "事後補算,僅供判讀,不改變原結論(week6-7未算MDE)"
@@ -146,9 +217,14 @@
           "value": 0.5965216022664672
         },
         "strategy_layer": {
-          "sharpe": 0.7067675137976599,
+          "sharpe": 0.7254101192120448,
+          "sharpe_compounding": 0.7067675137976599,
+          "unfiltered_sharpe": 0.5540055568345852,
+          "unfiltered_sharpe_compounding": 0.5165068170152203,
           "max_drawdown": -0.1399141342746466,
-          "diff": 0.19026069678243962,
+          "diff": 0.1714045623774596,
+          "diff_compounding": 0.19026069678243962,
+          "direction_match": true,
           "p_value": 0.4845,
           "mde": 0.6922883781284169
         }
@@ -173,9 +249,14 @@
           "mde": 0.04711529764743093
         },
         "strategy_layer": {
-          "sharpe": 0.1888673945053522,
+          "sharpe": 0.2213494914943691,
+          "sharpe_compounding": 0.1888673945053522,
+          "unfiltered_sharpe": 0.42108495198082746,
+          "unfiltered_sharpe_compounding": 0.37829512012969463,
           "max_drawdown": -0.13157941019369568,
-          "diff": -0.18942772562434243,
+          "diff": -0.19973546048645835,
+          "diff_compounding": -0.18942772562434243,
+          "direction_match": true,
           "p_value": 0.47,
           "mde": "見week10 MDE~0.7(策略層樣本量與階段四相同量級,未在week12重算)"
         }

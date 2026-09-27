@@ -93,13 +93,18 @@ def phase2() -> dict:
     dm, dm_p = M.diebold_mariano(xgb.loc[har.index], har)
 
     def strat_row(a: str, b: str) -> dict:
-        obs, p = BT.block_bootstrap_sharpe_diff(bts[a]["net_return"], bts[b]["net_return"],
-                                                 block_size=20, n_boot=3000, seed=0)
-        mde = BT.mde_from_returns(bts[a]["net_return"], bts[b]["net_return"],
-                                  block_size=20, n_boot=3000, seed=0)
-        eval_a = BT.evaluate(bts[a], cfg.vol_target)
-        return {"sharpe": float(eval_a["sharpe"]), "max_drawdown": float(eval_a["max_drawdown"]),
-               "diff": obs, "p_value": p, "mde": mde["mde"],
+        ret_a, ret_b = bts[a]["net_return"], bts[b]["net_return"]
+        obs, p = BT.block_bootstrap_sharpe_diff(ret_a, ret_b, block_size=20, n_boot=3000, seed=0)
+        mde = BT.mde_from_returns(ret_a, ret_b, block_size=20, n_boot=3000, seed=0)
+        eval_a, eval_b = BT.evaluate(bts[a], cfg.vol_target), BT.evaluate(bts[b], cfg.vol_target)
+        diff_comp = float(eval_a["sharpe"] - eval_b["sharpe"])
+        return {"sharpe": BT.arithmetic_sharpe(ret_a), "sharpe_compounding": float(eval_a["sharpe"]),
+               "unfiltered_sharpe": BT.arithmetic_sharpe(ret_b),
+               "unfiltered_sharpe_compounding": float(eval_b["sharpe"]),
+               "max_drawdown": float(eval_a["max_drawdown"]),
+               "diff": obs, "diff_compounding": diff_comp,
+               "direction_match": bool(np.sign(obs) == np.sign(diff_comp)),
+               "p_value": p, "mde": mde["mde"],
                "mde_note": "事後補算,僅供判讀,不改變原結論(week5未算MDE)"}
 
     qlike_hist20 = _source_qlike("hist20", inputs, cfg)
@@ -172,14 +177,20 @@ def phase3() -> dict:
         obs, p = BT.block_bootstrap_sharpe_diff(f_common, u_common, block_size=20, n_boot=3000, seed=0)
         mde = BT.mde_from_returns(f_common, u_common, block_size=20, n_boot=3000, seed=0)
         hmm_row = common_tbl[common_tbl["model"] == "hmm"].iloc[0]
+        diff_comp = float(hmm_row["filtered_sharpe"] - hmm_row["unfiltered_sharpe"])
 
         rows.append({
             "row": strat_name, "label": f"HMM 狀態篩選 {strat_name.upper()} vs 不篩選",
             "date_range": f"{common_idx.min().date()}..{common_idx.max().date()} ({len(common_idx)} 天)",
             "prediction_layer": pred_layer,
-            "strategy_layer": {"sharpe": float(hmm_row["filtered_sharpe"]),
+            "strategy_layer": {"sharpe": BT.arithmetic_sharpe(f_common),
+                              "sharpe_compounding": float(hmm_row["filtered_sharpe"]),
+                              "unfiltered_sharpe": BT.arithmetic_sharpe(u_common),
+                              "unfiltered_sharpe_compounding": float(hmm_row["unfiltered_sharpe"]),
                               "max_drawdown": float(hmm_row["filtered_max_drawdown"]),
-                              "diff": obs, "p_value": p, "mde": mde["mde"],
+                              "diff": obs, "diff_compounding": diff_comp,
+                              "direction_match": bool(np.sign(obs) == np.sign(diff_comp)),
+                              "p_value": p, "mde": mde["mde"],
                               "mde_note": "事後補算,僅供判讀,不改變原結論(week6-7未算MDE)"},
         })
 
@@ -200,6 +211,9 @@ def phase4() -> dict:
     # this row reproduces, not just approximates, the published numbers.
     bb = FE.block_bootstrap_significance(preds, orb, n_boot=2000, seed=0)
     pw = FE.power_analysis(preds, orb, n_boot=2000, seed=0)
+    series = FE.logistic_filter_series(preds, orb)
+    filt, unfilt = series["filtered"] / 1e4, series["unfiltered"] / 1e4
+    diff_comp = float(result["filtered_sharpe"] - result["unfiltered_sharpe"])
 
     return {
         "weeks": [8, 9, 10],
@@ -207,9 +221,13 @@ def phase4() -> dict:
             "row": "primary", "label": "logistic 篩選 ORB vs 不篩選",
             "prediction_layer": {"metric": "AUC (pooled OOS)",
                                  "value": float(roc_auc_score(preds["y_true"], preds["y_pred_proba"]))},
-            "strategy_layer": {"sharpe": float(result["filtered_sharpe"]),
+            "strategy_layer": {"sharpe": BT.arithmetic_sharpe(filt),
+                              "sharpe_compounding": float(result["filtered_sharpe"]),
+                              "unfiltered_sharpe": BT.arithmetic_sharpe(unfilt),
+                              "unfiltered_sharpe_compounding": float(result["unfiltered_sharpe"]),
                               "max_drawdown": float(result["filtered_max_drawdown"]),
-                              "diff": float(result["filtered_sharpe"] - result["unfiltered_sharpe"]),
+                              "diff": float(bb["observed_sharpe_diff"]), "diff_compounding": diff_comp,
+                              "direction_match": bool(np.sign(bb["observed_sharpe_diff"]) == np.sign(diff_comp)),
                               "p_value": float(bb["p_value"]), "mde": float(pw["mde"])},
         }],
     }
@@ -236,6 +254,12 @@ def phase5() -> dict:
 
     strat = pd.read_parquet(dl.PROCESSED_DIR / "sequences" / "week12_task_a_strategy_layer.parquet")
     cnn_strat = strat[strat["model"] == "cnn"].iloc[0]
+    orb = pd.read_parquet(dl.PROCESSED_DIR / "strategies" / "orb_daily.parquet")
+    cnn_filter_preds = load_predictions("week12_task_a_cnn_filter")
+    cnn_series = FE.logistic_filter_series(cnn_filter_preds, orb)
+    cnn_filt, cnn_unfilt = cnn_series["filtered"] / 1e4, cnn_series["unfiltered"] / 1e4
+    diff_comp = float(cnn_strat["filtered_sharpe"] - cnn_strat["unfiltered_sharpe"])
+    diff_arith = BT.arithmetic_sharpe(cnn_filt) - BT.arithmetic_sharpe(cnn_unfilt)
 
     return {
         "weeks": [11, 12],
@@ -245,38 +269,65 @@ def phase5() -> dict:
                                  "value_a": float(cnn_auc), "value_b": float(hand_auc),
                                  "diff": float(bb["observed_auc_diff"]), "p_value": float(bb["p_value"]),
                                  "mde": float(pw["mde"])},
-            "strategy_layer": {"sharpe": float(cnn_strat["filtered_sharpe"]),
+            "strategy_layer": {"sharpe": BT.arithmetic_sharpe(cnn_filt),
+                              "sharpe_compounding": float(cnn_strat["filtered_sharpe"]),
+                              "unfiltered_sharpe": BT.arithmetic_sharpe(cnn_unfilt),
+                              "unfiltered_sharpe_compounding": float(cnn_strat["unfiltered_sharpe"]),
                               "max_drawdown": float(cnn_strat["filtered_max_drawdown"]),
-                              "diff": float(cnn_strat["filtered_sharpe"] - cnn_strat["unfiltered_sharpe"]),
+                              "diff": diff_arith, "diff_compounding": diff_comp,
+                              "direction_match": bool(np.sign(diff_arith) == np.sign(diff_comp)),
                               "p_value": float(cnn_strat["bb_p"]),
                               "mde": "見week10 MDE~0.7(策略層樣本量與階段四相同量級,未在week12重算)"},
         }],
     }
 
 
+def _direction_check(summary: dict) -> list[dict]:
+    """Week 13 (per-user follow-up): after switching results_summary.json's
+    main sharpe/diff fields from compounding to arithmetic, confirm every
+    row's DIRECTION (which side is higher) is unchanged - list each row's
+    arithmetic vs compounding diff sign side by side rather than asserting
+    it silently."""
+    rows = []
+    for phase_name in ("phase2", "phase3", "phase4", "phase5"):
+        for row in summary[phase_name]["rows"]:
+            sl = row["strategy_layer"]
+            if "diff_compounding" not in sl:
+                continue
+            rows.append({"phase": phase_name, "row": row["row"], "label": row["label"],
+                        "diff_arithmetic": sl["diff"], "diff_compounding": sl["diff_compounding"],
+                        "direction_match": sl["direction_match"]})
+    return rows
+
+
 def main() -> None:
+    phases = {"phase2": phase2(), "phase3": phase3(), "phase4": phase4(), "phase5": phase5()}
+    direction_check = _direction_check(phases)
+    n_flipped = sum(1 for r in direction_check if not r["direction_match"])
+
     summary = {
         "_cross_check_notes": [
-            "「sharpe」欄位(顯示值)用複利/幾何年化報酬(BT.evaluate / E._daily_eval,"
-            "equity[-1]**(252/n)-1,全專案自第5週起headline數字都用這個定義);"
-            "「diff」/「p_value」/「mde」欄位用算術平均年化Sharpe(BT._sharpe,"
-            "block_bootstrap_sharpe_diff內部定義,mean/std*sqrt(252))。兩者不是同一個"
-            "公式,「diff」字面上不會剛好等於兩個「sharpe」相減——這不是這次新產生的不一致,"
-            "是第5週就已經存在、貫穿全專案(週5/8/9/10/12)的既有設計:headline數字用複利"
-            "口徑,顯著性檢定用算術口徑(重抽樣3000-5000次時算術Sharpe計算成本低、統計性質"
-            "更單純)。本檔案逐一核對到週5(1.1375/-0.0026/0.9173/-0.0161/0.8517全部吻合)、"
-            "週7(HMM ORB 0.2/0.35/-0.188,VWAP 0.893/1.011/-0.213,全部吻合)、週8/10、"
-            "週12的原始報告數字,顯示層(sharpe/max_drawdown)逐一對上,只有diff/p/mde是"
-            "本週(第13週)才按同一套方法補算或重算,不是原報告既有的數字。",
+            "改用算術平均年化Sharpe(mean/std*sqrt(252),BT.arithmetic_sharpe)當「sharpe」/"
+            "「unfiltered_sharpe」/「diff」欄位的主要定義,跟block bootstrap顯著性檢定、"
+            "最小可偵測差(mde)用的是同一個定義,所以表中兩個sharpe相減就等於diff,不需要"
+            "另外換算。「sharpe_compounding」/「unfiltered_sharpe_compounding」/"
+            "「diff_compounding」是複利/幾何年化報酬版本(BT.evaluate/E._daily_eval,"
+            "equity[-1]**(252/n)-1),對照用——**各週報告本身顯示的都是複利版本,這裡沒有"
+            "改各週報告,只有這份程式產生的總表換了主要口徑**,方法論說明見"
+            "final_outline.md。",
+            f"方向檢查(誰高誰低,算術版 vs 複利版):{len(direction_check)} 個策略層比較"
+            f"全部檢查過,{n_flipped} 個方向不同({'無' if n_flipped == 0 else '見下'})——"
+            "見 _direction_check 欄位逐列比較。",
             "階段二 primary/secondary 兩列的 QLIKE 用不同目標變數(y_true_var vs rv_on)"
             "計算,見各列自己的 cross_check_note,不能跨列比較。",
         ],
-        "phase2": phase2(), "phase3": phase3(), "phase4": phase4(), "phase5": phase5(),
+        "_direction_check": direction_check,
+        **phases,
     }
     summary = jsonify(summary)
     p = REPORTS / "results_summary.json"
     p.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"wrote {p}")
+    print(f"wrote {p} - direction check: {n_flipped}/{len(direction_check)} flipped")
 
 
 if __name__ == "__main__":

@@ -199,6 +199,20 @@ def _sharpe(col: np.ndarray) -> float:
     return float(col.mean() / s * np.sqrt(S.TRADING_DAYS)) if s > 0 else np.nan
 
 
+def arithmetic_sharpe(ret: pd.Series) -> float:
+    """Arithmetic-mean annualized Sharpe (mean/std*sqrt(TRADING_DAYS)) - the
+    same definition ``block_bootstrap_sharpe_diff``/``mde_from_returns``
+    already use internally via the module-private ``_sharpe`` helper,
+    exposed here (week 13) for callers that want one series' own
+    arithmetic Sharpe, not just a diff. Distinct from ``evaluate()``'s
+    compounding/geometric annualized Sharpe - every week-by-week report
+    in this project displays the compounding version; only the
+    significance tests (and, from week 13, ``reports/results_summary.
+    json``'s main sharpe/diff fields) use this arithmetic one, so that a
+    table's "diff" column equals its two "sharpe" columns subtracted."""
+    return _sharpe(ret.to_numpy())
+
+
 def block_bootstrap_sharpe_diff_dist(ret_a: pd.Series, ret_b: pd.Series,
                                      block_size: int = 20, n_boot: int = 2000,
                                      seed: int = 0) -> tuple[float, np.ndarray]:
