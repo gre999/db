@@ -243,6 +243,31 @@ def block_bootstrap_sharpe_diff(ret_a: pd.Series, ret_b: pd.Series,
     return float(obs), p
 
 
+def mde_from_returns(ret_a: pd.Series, ret_b: pd.Series, block_size: int = 20,
+                     n_boot: int = 2000, seed: int = 0, alpha: float = 0.05,
+                     power: float = 0.80, target_diff: float = 0.20) -> dict:
+    """Week 13 (config/week13_wrapup.toml [results_summary]): the generic
+    return-series form of ``src.filter_eval.power_analysis`` (week 10) -
+    same SE/MDE/years-needed design (SE = std of the block-bootstrap
+    Sharpe-diff distribution, MDE = ``(z_(1-alpha/2)+z_power) * se``), but
+    taking two arbitrary daily return series directly instead of the
+    week-8 filter pipeline's ``preds``/``orb`` inputs. ``power_analysis``
+    is a thin wrapper around this for backward compatibility."""
+    from scipy import stats
+    obs, diffs = block_bootstrap_sharpe_diff_dist(ret_a, ret_b, block_size, n_boot, seed)
+    se = float(diffs.std(ddof=1))
+    z = stats.norm.ppf(1 - alpha / 2) + stats.norm.ppf(power)
+    mde = z * se
+    n_days = len(ret_a.align(ret_b, join="inner")[0])
+    n_years = n_days / S.TRADING_DAYS
+    se_target = target_diff / z
+    years_needed = n_years * (se / se_target) ** 2 if se_target > 0 else np.inf
+    return {"observed_diff": obs, "se": se, "z_factor": z, "mde": mde,
+           "n_days": n_days, "n_years": n_years, "target_diff": target_diff,
+           "years_needed_for_target": years_needed,
+           "detectable": bool(abs(obs) >= mde)}
+
+
 def regress_weight_diff_on_return(weight_a: pd.Series, weight_b: pd.Series,
                                   ret: pd.Series, lags: int | None = None
                                   ) -> dict:

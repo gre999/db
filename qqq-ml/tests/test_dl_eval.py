@@ -45,3 +45,35 @@ def test_block_bootstrap_auc_diff_inner_joins_on_date():
 
     out = DE.block_bootstrap_auc_diff(y, p_a, p_b, n_boot=50, seed=0)
     assert out["n_days"] == 200
+
+
+def test_block_bootstrap_auc_diff_dist_matches_the_p_value_function():
+    rng = np.random.default_rng(8)
+    n = 400
+    days = pd.bdate_range("2019-01-01", periods=n)
+    y = pd.Series((rng.random(n) < 0.5).astype(int), index=days)
+    p_a = pd.Series(rng.uniform(0, 1, n), index=days)
+    p_b = pd.Series(rng.uniform(0, 1, n), index=days)
+
+    obs, diffs, n_days = DE.block_bootstrap_auc_diff_dist(y, p_a, p_b, n_boot=300, seed=2)
+    out = DE.block_bootstrap_auc_diff(y, p_a, p_b, n_boot=300, seed=2)
+    assert obs == pytest.approx(out["observed_auc_diff"])
+    assert n_days == out["n_days"]
+    assert len(diffs) == out["n_boot"]
+
+
+def test_auc_power_analysis_mde_shrinks_with_more_days():
+    rng = np.random.default_rng(9)
+
+    def make(n):
+        days = pd.bdate_range("2015-01-01", periods=n)
+        y = pd.Series((rng.random(n) < 0.5).astype(int), index=days)
+        p_a = pd.Series(rng.uniform(0, 1, n), index=days)
+        p_b = pd.Series(rng.uniform(0, 1, n), index=days)
+        return y, p_a, p_b
+
+    small = DE.auc_power_analysis(*make(250), n_boot=300, seed=0)
+    large = DE.auc_power_analysis(*make(2000), n_boot=300, seed=0)
+    assert small["mde"] > large["mde"]
+    assert large["n_years"] == pytest.approx(2000 / 252.0)
+    assert small["z_factor"] == pytest.approx(1.959963985 + 0.8416212336, abs=1e-6)

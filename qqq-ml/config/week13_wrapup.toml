@@ -1,0 +1,195 @@
+# Week 13 (phase 5, week 3 / wrap-up week): stage 5 close-out + start of the
+# final-report spine tying all five phases together. Written and reviewed
+# BEFORE running any new check or generating results_summary.json/
+# final_outline.md, per this project's standing discipline. No model is
+# retrained here and nothing already finalized (CNN architecture/training,
+# week 8-12 success criteria, interpretation rules) is changed - every item
+# below is either a new descriptive/diagnostic computation, or a mechanical
+# re-aggregation of numbers already produced by earlier weeks' saved
+# prediction/backtest files.
+
+# =====================================================================
+# Part 0: phase -> week mapping used throughout this file and in
+# reports/results_summary.json / reports/final_outline.md.
+# FLAG FOR REVIEW: weeks 1-7 were never explicitly labeled "phase N" in
+# their own report titles (only weeks 8-12 say "階段四"/"階段五" in the
+# title). This mapping is my best reconstruction from thematic breaks and
+# config-file naming; please correct if it's wrong before anything downstream
+# depends on it.
+# =====================================================================
+[phases]
+phase1 = { weeks = [1, 2], name = "資料品質與特徵工程", role = "infra - no dedicated thesis-support paragraph in final_outline.md (per user spec, only phase 2-5 get one)" }
+phase2 = { weeks = [3, 4, 5], name = "波動率預測與部位管理", role = "HAR/隨機森林/XGBoost 波動預測 -> 波動目標部位規模" }
+phase3 = { weeks = [6, 7], name = "市場狀態標籤", role = "HMM/KMeans 狀態標籤、ORB/VWAP 在各狀態下的績效" }
+phase4 = { weeks = [8, 9, 10], name = "交易日篩選", role = "開盤特徵 logistic/樹模型篩選 ORB 交易日" }
+phase5 = { weeks = [11, 12], name = "深度學習(CNN)", role = "分鐘序列 1D-CNN,凍結架構跑完整 walk-forward" }
+
+# =====================================================================
+# Part 1: stage 5 close-out (reports/stage5_chapter.md)
+# =====================================================================
+
+[stage5.auc_power_analysis]
+# New src function `src.dl_eval.auc_power_analysis`, mirroring
+# `src.filter_eval.power_analysis` (week 10) exactly: SE = std of the
+# block-bootstrap AUC-diff distribution (needs `block_bootstrap_auc_diff`
+# to optionally return its raw diffs - a `_dist` variant added alongside it,
+# same split as backtest.py's block_bootstrap_sharpe_diff/_dist pair).
+# MDE = (z_(1-alpha/2) + z_power) * SE, two-sided.
+targets = [
+  "task_a_primary: CNN vs hand-feature logistic (week12 primary comparison)",
+  "task_a_stacking: stacking vs hand-feature logistic (week12 secondary comparison)",
+  "task_b15: CNN vs best flattened baseline",
+  "task_b30: CNN vs best flattened baseline",
+]
+block_size = 20               # trading days, same as every other block bootstrap this project
+n_boot = 5000                 # bumped from week12's 2000: this is now estimating an SE for a
+                              # power calc, not just a p-value, and week 10's lesson was that
+                              # SE/percentile estimates need more precision than a plain
+                              # significance call - 5000 keeps runtime reasonable (4 targets)
+                              # while roughly halving Monte Carlo noise on the SE vs n_boot=2000
+seed = 0
+alpha = 0.05
+power = 0.80
+target_auc_diff = 0.05        # for the "years needed" back-calculation - an AUC diff of 0.05
+                              # is the rough scale of what week12 actually observed (0.055,
+                              # 0.019), not an arbitrary round number
+
+[stage5.shuffled_label_full]
+# Expands week 11/12's single-fold shuffled-label sanity check to all 8
+# folds. This reuses the SAME fold fit/val/test splits and the SAME frozen
+# single-seed `train_one_seed` + `shuffled_label_check` already in
+# src/models/cnn.py - re-derives the deterministic fold splits (WalkForwardSplit,
+# validation_years=1) exactly as run_week12_cnn_walkforward.py does, then
+# fits 40 shuffled-label models (a diagnostic, not the primary model - the
+# primary CNN result from week 12 is not touched). Task A only (task B's
+# shuffled-label check was never part of the pre-registered sanity checks).
+folds = [1, 2, 3, 4, 5, 6, 7, 8]
+shuffle_seeds = [0, 1, 2, 3, 4]  # same 5 seeds already used for the week12 fold-8 reseed
+pass_band = [0.45, 0.55]         # unchanged from week11/12's rule - informational only now,
+                                 # since a handful of the 40 individual runs literally falling
+                                 # outside the band is expected under normal sampling noise
+                                 # once you run this many; report the FULL distribution
+                                 # (mean, sd, min, max, share outside band) rather than a
+                                 # per-run pass/fail count as the headline number
+
+[stage5.fold2_description]
+# Fold 2's test window is 2019's data through test_start + 1yr per the walk-
+# forward split - CONFIRM EXACT DATES from week12_task_a_fold_diagnostics.parquet
+# before writing (expected ~2020 calendar year, i.e. the COVID crash/recovery,
+# based on fold 1 = 2019 and the walk-forward's 1-year step - this needs
+# verifying against the actual fold boundaries, not assumed from memory).
+describe_only = true          # explicitly: no re-weighting, no exclusion, no change to any
+                              # already-reported pooled/per-fold number because of this
+stats = [
+  "annualized realized volatility of QQQ in the test window (vs the other 7 folds' test windows, for scale)",
+  "max drawdown of buy-and-hold QQQ in the test window",
+  "count of |daily return| > 3% days in the test window",
+  "mean VIX level in the test window (vs other folds)",
+]
+contrast = "CNN test AUC (0.4483, below chance) vs hand-feature logistic's fold-2 test AUC, side by side"
+
+[stage5.task_b_conclusion]
+# Purely descriptive synthesis of already-computed week11+week12 numbers
+# (no new computation): task B's N=15/30 CNN and baseline AUCs all sit at
+# or near 0.50-0.52, block-bootstrap diffs vs the best flattened baseline
+# are not significant even before Holm correction, and the directional
+# strategy layer (enter in predicted direction, flatten at close) has near-
+# zero Sharpe both N. Conclusion to state plainly: the first N minutes of a
+# session do not carry usable information about the direction of the
+# remainder of that session, at either N tested.
+
+[stage5.future_work_lstm]
+# Descriptive only, no computation. Rationale to write: (1) week 12 found the
+# CNN carries no incremental information over 14 hand-crafted open-window
+# features and is significantly worse standalone (task A); (2) task B's
+# flattened-baseline and CNN AUCs are both near chance, so there's no
+# established base signal for a longer-memory architecture to extract more
+# of; (3) sample size (8 walk-forward folds, ~250 fit-window days each) is
+# already tight for a 1809-parameter CNN's overfitting gap - an LSTM/
+# Transformer with more parameters and longer effective sequence memory
+# would need MORE data to fit responsibly, not less, and this project's
+# data history is fixed. Listed as future work conditional on a
+# meaningfully longer minute-bar history becoming available, not as a next
+# step to take now.
+
+# =====================================================================
+# Part 2: reports/results_summary.json (scripts/collect_results.py)
+# =====================================================================
+
+[results_summary]
+# One row per phase (2-5; phase 1 has no predictive/strategy claim so it's
+# excluded from this table, consistent with it having no thesis-support
+# paragraph either). Each row has a headline_model (the phase's own
+# pre-registered PRIMARY model/comparison - not cherry-picked after the
+# fact) with prediction_layer {metric, value, diff, p_value} and
+# strategy_layer {sharpe, max_drawdown, diff, p_value, mde}. mde is newly
+# computed here for every phase via the SAME block-bootstrap-SE method as
+# stage5.auc_power_analysis (§1), applied to Sharpe instead of AUC (reusing
+# src.filter_eval.power_analysis's formula/z-factor, generalized to accept
+# an arbitrary return-series pair instead of assuming the week8 filter
+# pipeline) - this is genuinely new for phases 2/3 (weeks 5-7 never
+# computed an MDE; that concept only entered the project in week 10), but
+# it is a mechanical recomputation from already-saved return series, not a
+# new model or a new backtest design.
+# phase2: primary row HAR+殘差XGB vs HAR; secondary row HAR+殘差XGB vs 20日歷史波動
+# (week05_position.md 第六節,sharpe diff -0.0161, p=0.8517) - both already
+# block-bootstrap-tested in week 5, reused here not rerun.
+headline_model.phase2 = [
+  { row = "primary", label = "HAR+殘差XGB vs HAR", prediction_layer_metric = "QLIKE (pooled OOS)" },
+  { row = "secondary", label = "HAR+殘差XGB vs 20日歷史波動", prediction_layer_metric = "QLIKE (pooled OOS)" },
+]
+# phase3: two rows, HMM-filtered ORB and HMM-filtered VWAP, both on the
+# common date range 2020-01-02..2026-09-22 (1689 days, week07_regime_eval.md
+# 第254行既有的共同覆蓋範圍). prediction_layer is NOT kappa here - it's the
+# model-external validation already in week07_regime_eval.md (第44-51行):
+# predictive-type HMM state vs actual realized volatility (log_rv_desc),
+# Newey-West HAC t-test, state0 as reference. HMM state1 diff=0.7254
+# t=9.9349 p~0, state2 diff=1.3906 t=12.1974 p~0 - reused directly from
+# that table (recomputation only needs to reload the saved state labels +
+# realized-vol series, not refit HMM).
+headline_model.phase3 = [
+  { row = "orb", label = "HMM 狀態篩選 ORB vs 不篩選", date_range = "2020-01-02..2026-09-22 (1689 天)", prediction_layer_metric = "模型外驗證:預測型HMM狀態分組的已實現波動差異與t值 (Newey-West HAC, state0為對照組)" },
+  { row = "vwap", label = "HMM 狀態篩選 VWAP vs 不篩選", date_range = "2020-01-02..2026-09-22 (1689 天)", prediction_layer_metric = "同上,與ORB列共用同一組狀態分組t值(狀態分組不隨策略變)" },
+]
+headline_model.phase4 = "logistic 篩選 ORB vs 不篩選 (week08/09/10 貫穿全程的主模型,不是探索性兩特徵模型); prediction_layer metric = AUC (pooled OOS)"
+headline_model.phase5 = "CNN vs 手工特徵 logistic (task A 主比較,week12); prediction_layer metric = AUC (pooled, 2019-2026 共同日期)"
+cross_check = "every number in results_summary.json is cross-checked by hand against the exact figure already printed in that week's own report; any mismatch is listed and investigated (not silently reconciled) in reports/stage5_chapter.md or a short note in results_summary.json itself, per the completion standard"
+mde_phase2_phase3_note = "階段二、三的策略層MDE是事後補算(這個概念第10週才引入,週5-7沒算過),僅供判讀當年樣本量的檢定力量級,不改變該階段原本報告的結論或成功/失敗判定"
+
+# =====================================================================
+# Part 3: reports/final_outline.md
+# =====================================================================
+
+[final_outline]
+thesis_draft = "機器學習能改善預測指標,但在扣除實際成本後,無法在現有樣本下顯著改善 QQQ 短期策略的績效。"
+phase_support_paragraphs = ["phase2", "phase3", "phase4", "phase5"]  # one paragraph each, per [phases] above
+
+side_results = [
+  "兩篇論文複現(week06_regimes.md 第二節):ORB 複現夏普 1.012 對論文 1.13、VWAP 複現夏普 2.339 對論文 2.1,同量級,複現通過",
+  "VWAP 實際成本下夏普約減半(week06_regimes.md 第二節):單位曝險夏普在論文取樣期間,主成本下 1.261,換成論文近乎零成本假設下 2.046-2.339,主成本版本大約是論文成本版本的一半",
+]
+
+methodology_chapter_topics = [
+  "事先寫定設定(每週 config/weekNN_*.toml,查看結果前寫定,結果不論好壞照實報告)",
+  "巢狀 walk-forward(訓練段內再切配適/驗證段,測試段不參與配適或選門檻,選定門檻不重配適套用)",
+  "截斷與篡改測試(week11/12 CNN 序列特徵的洩漏檢查:truncation test + mutation test)",
+  "隨機篩選基準與 block bootstrap(week08 起的雙層顯著性檢定:排序層 vs 策略層)",
+  "檢定力分析(week10 引入,week13 擴大到 AUC 與全部四個階段的策略層 MDE)",
+]
+
+# Verified against git history / prior reports before writing (see chat) -
+# do not restate from memory without this kind of check next time either.
+correction_log_appendix = [
+  { week = 5, title = "20日歷史波動部位權重的前視偏誤", found_via = "week05_review_notes.md 全面前視偏誤複查(在階段三之前主動做的複查,不是被結果異常倒逼發現)", scope = "hist20 變體的滾動窗納入當天自己的收盤到收盤報酬;修正前夏普 1.4715、修正後 1.1568", corrected_conclusion = "修正後 HAR、HAR+殘差XGB、20日歷史波動三者夏普統計上無顯著差異(week05_position.md 第六節)" },
+  { week = 6, title = "HMM 樣本外狀態解碼漏了測試段第一天的轉移步驟", found_via = "寫 test_forward_filter_init_dist_seeds_without_lookahead 這個測試時發現(commit c3e15b1),在看任何第6週結果之前就抓到並修正,不是事後回頭改", scope = "forward_filter 手寫前向演算法(刻意不用 hmmlearn 的 predict()/predict_proba(),因為那兩個會在整段序列內看未來);測試段第一天原本被當成全新序列起點,沒有從訓練段最後一天的信念狀態往前轉移", corrected_conclusion = "修正後才產生 week06_regimes.md 報告的全部 HMM 樣本外狀態數字" },
+  { week = 7, title = "跨狀態來源比較的日期範圍不一致", found_via = "config/week07_regime_eval.toml 內建的跨折對齊修正 + week07_regime_eval.md 第251/254行:波動三分位只覆蓋第2-8折(第1折沒有更早的預測值定分位門檻),HMM/KMeans覆蓋全部8折", scope = "三個狀態來源(HMM、KMeans、波動三分位)的可用日期範圍不同,直接比較「不篩選」欄位會不是同一組交易日", corrected_conclusion = "改成在共同涵蓋日期範圍(2020-01-02..2026-09-22,1689天)上比較,ORB/VWAP 兩策略都套用同一個共同範圍" },
+  { week = 8, title = "原始三項成功標準沒有一項是差異顯著性檢定", found_via = "使用者在定稿前要求補四項檢查(block bootstrap、逐年拆解、成本敏感度),推翻了字面上「三項全過」的結論", scope = "篩選後夏普 0.707 對不篩選 0.517,字面達成,但 block bootstrap p=0.485 不顯著,且效果集中在兩個極端年份(2022負、2026正)部分抵銷", corrected_conclusion = "第9週起把 block bootstrap p<0.05 明訂為四項成功標準之一;五個模型(week8-9)沒有一個四項全過" },
+  { week = 10, title = "隨機篩選基準重估種子的蒙地卡羅精度不足", found_via = "n_reps=1000 時5個種子的p值在0.030-0.051間跳動(一個超過0.05),當時解讀成「排序層不穩健」", scope = "n=1000在p≈0.04附近標準誤約0.006,5個種子0.021的全距大半是估計精度不足的雜訊,不是底層p值真的在門檻兩側擺盪", corrected_conclusion = "改用n_reps=10000重估,3個種子穩定落在0.042-0.047,logistic排序層結果其實穩定,只是比第8週單次估計更接近0.05這條線" },
+  { week = 6, title = "VWAP 論文複現誤用 ORB 的部位規則", found_via = "看到異常結果後查出:第一次複現夏普3.26、最大回撤-35.9%,遠超論文的2.1/-0.094,回頭查部位規則才發現誤用", scope = "VWAP複現誤套用ORB的「每筆風險1%權益、4倍槓桿上限」規則,而不是VWAP自己論文的「100%權益、不加槓桿、股數當日開盤算死不隨盤中權益重算」規則", corrected_conclusion = "改為1倍槓桿、每天開盤算一次股數後,複現夏普2.339、最大回撤-0.0957,同論文2.1/-0.094同一量級,複現通過(week06_regimes.md第二節現在的數字)" },
+]
+
+limitations_and_future_work = "彙總每階段各自章節/stage chapter 已經寫過的限制,不重寫内容,只做跨階段層級的彙整(樣本量是貫穿全專案的根本限制,不是任何單一階段的執行問題)。"
+
+figures_inventory = "掃 reports/figures/ 底下每個檔名,回頭找是哪個 scripts/make_weekNN_report.py 產生、讀哪個 data/processed/ 檔案,做成表格,不是重新畫圖"
+
+completion_criteria = "階段五章節完成(reports/stage5_chapter.md);結果總表由程式產生(scripts/collect_results.py -> reports/results_summary.json)且與各週報告逐一核對一致(不一致列出並追查,不悄悄調整);期末報告主旨、章節結構、關鍵數字定案(reports/final_outline.md)。每完成一部分簡短回報。"

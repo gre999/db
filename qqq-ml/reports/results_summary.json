@@ -1,0 +1,185 @@
+{
+  "_cross_check_notes": [
+    "「sharpe」欄位(顯示值)用複利/幾何年化報酬(BT.evaluate / E._daily_eval,equity[-1]**(252/n)-1,全專案自第5週起headline數字都用這個定義);「diff」/「p_value」/「mde」欄位用算術平均年化Sharpe(BT._sharpe,block_bootstrap_sharpe_diff內部定義,mean/std*sqrt(252))。兩者不是同一個公式,「diff」字面上不會剛好等於兩個「sharpe」相減——這不是這次新產生的不一致,是第5週就已經存在、貫穿全專案(週5/8/9/10/12)的既有設計:headline數字用複利口徑,顯著性檢定用算術口徑(重抽樣3000-5000次時算術Sharpe計算成本低、統計性質更單純)。本檔案逐一核對到週5(1.1375/-0.0026/0.9173/-0.0161/0.8517全部吻合)、週7(HMM ORB 0.2/0.35/-0.188,VWAP 0.893/1.011/-0.213,全部吻合)、週8/10、週12的原始報告數字,顯示層(sharpe/max_drawdown)逐一對上,只有diff/p/mde是本週(第13週)才按同一套方法補算或重算,不是原報告既有的數字。",
+    "階段二 primary/secondary 兩列的 QLIKE 用不同目標變數(y_true_var vs rv_on)計算,見各列自己的 cross_check_note,不能跨列比較。"
+  ],
+  "phase2": {
+    "weeks": [
+      3,
+      4,
+      5
+    ],
+    "rows": [
+      {
+        "row": "primary",
+        "label": "HAR+殘差XGB vs HAR",
+        "prediction_layer": {
+          "metric": "QLIKE (target=y_true_var, week3/4預測檔自己的RTH-only已實現變異數)",
+          "value_a": 0.18270658528670175,
+          "value_b": 0.19741975001698353,
+          "diff": -0.01471316473028179,
+          "test": "Diebold-Mariano",
+          "dm_stat": -3.5085286437031935,
+          "p_value": 0.00045059271024039556,
+          "cross_check_note": "此列QLIKE跟下面secondary列的QLIKE數字不能直接比較:這列的目標變數是y_true_var(RTH-only已實現變異數,week3/4預測檔本身的定義),secondary列的目標變數是week5 backtest層的rv_on(=rv+隔夜報酬平方,收盤到收盤變異數)。查過src/strategies.py的scale_ratios/cc_variance_forecast docstring,確認是目標變數定義不同,不是計算錯誤。"
+        },
+        "strategy_layer": {
+          "sharpe": 1.1375006781865848,
+          "max_drawdown": -0.24470247025604963,
+          "diff": -0.0025998316877138272,
+          "p_value": 0.9173333333333333,
+          "mde": 0.06862805674590372,
+          "mde_note": "事後補算,僅供判讀,不改變原結論(week5未算MDE)"
+        }
+      },
+      {
+        "row": "secondary",
+        "label": "HAR+殘差XGB vs 20日歷史波動",
+        "prediction_layer": {
+          "metric": "QLIKE (target=rv_on, week5 backtest層的收盤到收盤變異數,含隔夜跳空)",
+          "value_a": 0.26515334456786943,
+          "value_b": 0.3617317732052798,
+          "diff": -0.0965784286374104,
+          "note": "hist20不是walk-forward預測模型(用當天自己的滾動已實現變異數當預測),不適用DM檢定架構,只報點估計,無p值"
+        },
+        "strategy_layer": {
+          "sharpe": 1.1375006781865848,
+          "max_drawdown": -0.24470247025604963,
+          "diff": -0.016104525843169792,
+          "p_value": 0.8516666666666667,
+          "mde": 0.23753316691521864,
+          "mde_note": "事後補算,僅供判讀,不改變原結論(week5未算MDE)"
+        }
+      }
+    ]
+  },
+  "phase3": {
+    "weeks": [
+      6,
+      7
+    ],
+    "rows": [
+      {
+        "row": "orb",
+        "label": "HMM 狀態篩選 ORB vs 不篩選",
+        "date_range": "2020-01-02..2026-09-22 (1689 天)",
+        "prediction_layer": {
+          "metric": "predictive-HMM-state vs realized log_rv_desc (Newey-West HAC)",
+          "reference_state": 0,
+          "states": [
+            {
+              "state": 1,
+              "diff_vs_state0": 0.7253859614879739,
+              "se": 0.0730140658852503,
+              "t": 9.934879706986846,
+              "p": 2.9353002350279195e-23,
+              "n": 763
+            },
+            {
+              "state": 2,
+              "diff_vs_state0": 1.3906332526811989,
+              "se": 0.11401086782592113,
+              "t": 12.19737450647691,
+              "p": 3.2100821028775566e-34,
+              "n": 409
+            }
+          ]
+        },
+        "strategy_layer": {
+          "sharpe": 0.20009269471868826,
+          "max_drawdown": -0.18834479587077135,
+          "diff": -0.15661439807721028,
+          "p_value": 0.57,
+          "mde": 0.7864258470473808,
+          "mde_note": "事後補算,僅供判讀,不改變原結論(week6-7未算MDE)"
+        }
+      },
+      {
+        "row": "vwap",
+        "label": "HMM 狀態篩選 VWAP vs 不篩選",
+        "date_range": "2020-01-02..2026-09-22 (1689 天)",
+        "prediction_layer": {
+          "metric": "predictive-HMM-state vs realized log_rv_desc (Newey-West HAC)",
+          "reference_state": 0,
+          "states": [
+            {
+              "state": 1,
+              "diff_vs_state0": 0.7253859614879739,
+              "se": 0.0730140658852503,
+              "t": 9.934879706986846,
+              "p": 2.9353002350279195e-23,
+              "n": 763
+            },
+            {
+              "state": 2,
+              "diff_vs_state0": 1.3906332526811989,
+              "se": 0.11401086782592113,
+              "t": 12.19737450647691,
+              "p": 3.2100821028775566e-34,
+              "n": 409
+            }
+          ]
+        },
+        "strategy_layer": {
+          "sharpe": 0.8931356899120537,
+          "max_drawdown": -0.21287534699578803,
+          "diff": -0.10256225213890613,
+          "p_value": 0.44066666666666665,
+          "mde": 0.3722867163606097,
+          "mde_note": "事後補算,僅供判讀,不改變原結論(week6-7未算MDE)"
+        }
+      }
+    ]
+  },
+  "phase4": {
+    "weeks": [
+      8,
+      9,
+      10
+    ],
+    "rows": [
+      {
+        "row": "primary",
+        "label": "logistic 篩選 ORB vs 不篩選",
+        "prediction_layer": {
+          "metric": "AUC (pooled OOS)",
+          "value": 0.5965216022664672
+        },
+        "strategy_layer": {
+          "sharpe": 0.7067675137976599,
+          "max_drawdown": -0.1399141342746466,
+          "diff": 0.19026069678243962,
+          "p_value": 0.4845,
+          "mde": 0.6922883781284169
+        }
+      }
+    ]
+  },
+  "phase5": {
+    "weeks": [
+      11,
+      12
+    ],
+    "rows": [
+      {
+        "row": "primary",
+        "label": "CNN vs 手工特徵 logistic (task A)",
+        "prediction_layer": {
+          "metric": "AUC (pooled, 2019-2026共同日期)",
+          "value_a": 0.5417398815981886,
+          "value_b": 0.5971522831265627,
+          "diff": -0.05541240152837401,
+          "p_value": 0.0008,
+          "mde": 0.04711529764743093
+        },
+        "strategy_layer": {
+          "sharpe": 0.1888673945053522,
+          "max_drawdown": -0.13157941019369568,
+          "diff": -0.18942772562434243,
+          "p_value": 0.47,
+          "mde": "見week10 MDE~0.7(策略層樣本量與階段四相同量級,未在week12重算)"
+        }
+      }
+    ]
+  }
+}

@@ -265,23 +265,13 @@ def power_analysis(preds: pd.DataFrame, orb: pd.DataFrame,
     Years-needed back-calculation assumes SE ~ 1/sqrt(n_days) (the usual
     first-order approximation - not verified against a second block size
     or a resampled series length here, so treat it as an order-of-
-    magnitude estimate, not a precise design target)."""
-    from scipy import stats
+    magnitude estimate, not a precise design target). Thin wrapper around
+    the generic :func:`src.backtest.mde_from_returns` (week 13), kept for
+    backward compatibility with existing callers/tests."""
     series = logistic_filter_series(preds, orb)
-    obs, diffs = BT.block_bootstrap_sharpe_diff_dist(
-        series["filtered"] / 1e4, series["unfiltered"] / 1e4,
-        block_size=block_size, n_boot=n_boot, seed=seed)
-    se = float(diffs.std(ddof=1))
-    z = stats.norm.ppf(1 - alpha / 2) + stats.norm.ppf(power)
-    mde = z * se
-    n_days = len(series["unfiltered"])
-    n_years = n_days / 252.0
-    se_target = target_diff / z
-    years_needed = n_years * (se / se_target) ** 2 if se_target > 0 else np.inf
-    return {"observed_diff": obs, "se": se, "z_factor": z, "mde": mde,
-           "n_days": n_days, "n_years": n_years, "target_diff": target_diff,
-           "years_needed_for_target": years_needed,
-           "detectable": bool(abs(obs) >= mde)}
+    return BT.mde_from_returns(series["filtered"] / 1e4, series["unfiltered"] / 1e4,
+                               block_size=block_size, n_boot=n_boot, seed=seed,
+                               alpha=alpha, power=power, target_diff=target_diff)
 
 
 def random_filter_p_value(preds: pd.DataFrame, orb: pd.DataFrame,
