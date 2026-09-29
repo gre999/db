@@ -65,6 +65,20 @@ winget install MiKTeX.MiKTeX
 ```
 中文字型用系統內建的 Noto Sans TC(Windows 內附,`C:\Windows\Fonts\NotoSansTC-VF.ttf`)——`reports\final_report_template.md` 的 YAML 開頭已指定 `mainfont`/`CJKmainfont: "Noto Sans TC"`,不需另外安裝字型。`reports\final_report.md` 是範本(`final_report_template.md`)套用 `scripts\make_final_report.py` 從 `reports\results_summary.json` 填入數字後產生的,不要直接編輯 `final_report.md` 本身。
 
+## 口試簡報(PPTX)
+
+```cmd
+:: 只重新產生 reports\defense_slides.pptx(含它需要的兩張圖),results_summary.json 數字更新時可以重出
+.venv\Scripts\python scripts\run_all.py --slides
+```
+
+`scripts\make_defense_slides.py`(14頁,對照 `reports\defense_outline.md`)全部數字從 `reports\results_summary.json` 讀取,不手打;`scripts\make_defense_figures.py` 先補產生兩張既有分析沒存過圖的圖(週8門檻曲線疊隨機篩選區間、週12逐折AUC),兩者都不做新分析。字型同樣用 Noto Sans TC。逐頁視覺檢查(文字有沒有溢出、圖有沒有被切掉、中文/符號有沒有方框)用 LibreOffice 把 pptx 轉成 PDF 看過一次:
+```cmd
+winget install TheDocumentFoundation.LibreOffice
+"C:\Program Files\LibreOffice\program\soffice.exe" --headless --convert-to pdf --outdir reports reports\defense_slides.pptx
+```
+(這個轉出來的 PDF 只是檢查用的暫存檔,不是交付物,檢查完就刪了,不進 git。)第一版檢查時就抓到一張圖(週14「為什麼難」那張)在投影片底部被切掉——只指定寬度、沒限制高度,圖的長寬比在那個版位下會超出投影片邊界,已改成用高度反推寬度並置中。
+
 ## 可重現性
 
 `requirements.txt`/`requirements-dev.txt` 鎖死版本(對照 Python 3.12 的乾淨 venv 實際測過)。`scripts/run_all.py` 從資料清理一路跑到 `reports/final_report.pdf`,第14週在一個全新建立的 venv(不是既有的 `.venv`)、依鎖定版本重新安裝全部套件後,實際跑過一次 `--skip-cnn` 全流程並計時:

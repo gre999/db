@@ -6,6 +6,7 @@ scipy==1.18.1  # used directly (block bootstrap / power analysis norm.ppf), not 
 xgboost==3.4.1
 hmmlearn==0.3.3
 matplotlib==3.11.2
+python-pptx==1.0.2  # scripts/make_defense_slides.py only, not imported by src/
 pytest==9.1.1
 tzdata==2025.3  # IANA time zones; Windows has no system tz database
 ib_async==2.1.0  # IBKR historical data download

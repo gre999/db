@@ -135,6 +135,15 @@ def build_pdf() -> None:
     print(f"wrote {out}")
 
 
+def build_slides() -> None:
+    """Week 14 Part 5: regenerate the two figures defense_slides.pptx needs
+    that aren't produced by any weekly report script, then rebuild the
+    deck itself. Both scripts read reports/results_summary.json and
+    already-saved prediction/diagnostic files only - no new analysis."""
+    run([PY, "scripts/make_defense_figures.py"], "defense figures (week 8 threshold curve, week 12 per-fold AUC)")
+    run([PY, "scripts/make_defense_slides.py"], "defense_slides.pptx from results_summary.json")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--skip-cnn", action="store_true",
@@ -147,17 +156,24 @@ def main() -> None:
                     help="Also regenerate weeks 1-4's own .md reports (overwrites the "
                         "git-committed historical versions with today's src/ state - see "
                         "the module docstring). Off by default.")
+    ap.add_argument("--slides", action="store_true",
+                    help="Only rebuild reports/defense_slides.pptx (and the two figures "
+                        "it needs) from the current reports/results_summary.json - "
+                        "nothing else runs. Use after results_summary.json changes.")
     args = ap.parse_args()
 
     t_start = time.time()
-    if args.pdf_only:
+    if args.slides:
+        build_slides()
+    elif args.pdf_only:
         run([PY, "scripts/make_final_report.py"], "final_report.md from template")
+        build_pdf()
     else:
         for week, label, cmd in build_steps(args.skip_cnn, args.rebuild_early_reports):
             if week < args.from_week:
                 continue
             run(cmd, f"week {week}: {label}")
-    build_pdf()
+        build_pdf()
     print(f"\nTotal time: {time.time() - t_start:.1f}s")
 
 
