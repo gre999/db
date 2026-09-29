@@ -38,7 +38,7 @@ header-includes:
 
 ## 資料
 
-研究使用 QQQ 的分鐘與日線價量資料(2014年12月至2026年9月),以及 VIX/VXN 隱含波動率指數。所有原始資料下載自 Interactive Brokers,清理後存為 parquet 格式,並記錄填充率、異常值等資料品質指標(第1週)。策略層使用的兩個規則策略——ORB(開盤區間動能)與 VWAP(趨勢跟隨)——複現自 Zarattini 與 Aziz 的日內交易研究 (Zarattini & Aziz, 2023;VWAP 趨勢部分參考 Aziz & Zarattini, 2024 的日內動能策略,經 QuantConnect 重新實作)。
+研究使用 QQQ 的分鐘與日線價量資料(2014年12月至2026年9月),以及 VIX/VXN 隱含波動率指數。所有原始資料下載自 Interactive Brokers,清理後存為 parquet 格式,並記錄填充率、異常值等資料品質指標(第1週)。策略層使用的兩個規則策略——ORB(開盤區間動能)與 VWAP(趨勢跟隨)——複現自 Zarattini 與 Aziz 的日內交易研究(ORB: Zarattini & Aziz, 2023;VWAP: Zarattini & Aziz, 2023,*Volume Weighted Average Price (VWAP): The Holy Grail for Day Trading Systems*)。
 
 ## 方法論紀律
 
@@ -192,6 +192,4 @@ CNN 在第2折(2020年,COVID崩盤與反彈)的測試 AUC 降到 {{P5_FOLD2_AUC}
 
 Zarattini, C., & Aziz, A. (2023). *Can Day Trading Really Be Profitable? Evidence of Sustainable Long-term Profits from Opening Range Breakout (ORB) Day Trading Strategy vs. Benchmark in the US Stock Market*. SSRN Working Paper No. 4416622.
 
-Aziz, A., & Zarattini, C. (2024). *Beat the Market: An Effective Intraday Momentum Strategy for S&P500 ETF (SPY)*. SSRN Working Paper No. 4824172.
-
-*註:VWAP 趨勢策略的實作參考 QuantConnect 對上述日內動能策略的公開重現(見 `src/rules.py` 模組說明),而非直接對照論文原始程式碼;引用資訊透過網路搜尋交叉核對,論文標題與 SSRN 編號未逐一向原始來源覆核全文內容。*
+Zarattini, C., & Aziz, A. (2023). *Volume Weighted Average Price (VWAP): The Holy Grail for Day Trading Systems*. SSRN Working Paper No. 4631351. https://ssrn.com/abstract=4631351
