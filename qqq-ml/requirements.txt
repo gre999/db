@@ -1,11 +1,12 @@
-pandas>=2.2
-numpy>=1.26
-pyarrow>=15.0
-scikit-learn>=1.4
-xgboost>=2.0
-hmmlearn>=0.3
-matplotlib>=3.8
-pytest>=8.0
-tzdata  # IANA time zones; Windows has no system tz database
-ib_async>=2.0  # IBKR historical data download
-torch>=2.14  # CPU build only: pip install torch --index-url https://download.pytorch.org/whl/cpu
+pandas==3.0.6
+numpy==2.5.3
+pyarrow==25.0.1
+scikit-learn==1.9.1
+scipy==1.18.1  # used directly (block bootstrap / power analysis norm.ppf), not just a transitive dep
+xgboost==3.4.1
+hmmlearn==0.3.3
+matplotlib==3.11.2
+pytest==9.1.1
+tzdata==2025.3  # IANA time zones; Windows has no system tz database
+ib_async==2.1.0  # IBKR historical data download
+torch==2.14.0  # CPU build only: pip install torch --index-url https://download.pytorch.org/whl/cpu
