@@ -94,25 +94,35 @@ def main() -> None:
                 "strat_p": p5["strategy_layer"]["p_value"]})
 
     # ---------------------------------------------------------------
-    # Chart: |observed diff| vs MDE, strategy layer, per phase
+    # Chart: SIGNED observed diff vs MDE (magnitude, unsigned by
+    # construction), strategy layer, per phase. Sign matters here - phase 3
+    # and phase 5's filters make things WORSE (negative), not just "not
+    # significantly better" - collapsing to abs() would hide that.
     # ---------------------------------------------------------------
     phases = [r["phase"] for r in rows]
-    obs = [abs(r["strat_diff"]) for r in rows]
+    obs = [r["strat_diff"] for r in rows]
     mde = [r["mde"] for r in rows]
     x = np.arange(len(phases))
     width = 0.35
 
-    fig, ax = plt.subplots(figsize=(8, 4.2))
-    ax.bar(x - width / 2, obs, width, label="Observed |Sharpe diff|", color=BLUE)
-    ax.bar(x + width / 2, mde, width, label="Min. detectable diff (5%/80% power)", color=ORANGE)
+    fig, ax = plt.subplots(figsize=(8, 4.6))
+    obs_colors = [BLUE if o >= 0 else "#c23b6b" for o in obs]
+    ax.bar(x - width / 2, obs, width, label="Observed Sharpe diff (signed)", color=obs_colors)
+    ax.bar(x + width / 2, mde, width, label="Min. detectable diff (5%/80% power, magnitude)",
+          color=ORANGE)
+    ax.bar(x + width / 2, [-m for m in mde], width, color=ORANGE, alpha=0.5)
+    ax.axhline(0, color=INK, linewidth=0.8)
     for i, (o, m) in enumerate(zip(obs, mde)):
-        ax.text(i - width / 2, o + 0.02, f"{o:.3f}", ha="center", fontsize=8, color=INK)
-        ax.text(i + width / 2, m + 0.02, f"{m:.3f}", ha="center", fontsize=8, color=INK)
+        va = "bottom" if o >= 0 else "top"
+        off = 0.02 if o >= 0 else -0.02
+        ax.text(i - width / 2, o + off, f"{o:+.3f}", ha="center", va=va, fontsize=8, color=INK)
+        ax.text(i + width / 2, m + 0.02, f"±{m:.3f}", ha="center", fontsize=8, color=INK)
     ax.set_xticks(x)
     ax.set_xticklabels([PHASE_LABEL[p] for p in phases], fontsize=9)
     ax.set_ylabel("Annualized Sharpe (arithmetic-mean definition)")
-    ax.set_title("Strategy layer: observed effect size vs minimum detectable difference")
-    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    ax.set_title("Strategy layer: signed observed diff vs detectability band (±MDE)")
+    ax.legend(frameon=False, fontsize=8, loc="upper center",
+             bbox_to_anchor=(0.5, -0.12), ncol=2)
     fig.tight_layout()
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     fig_path = FIG_DIR / "w14_diff_vs_mde.png"
@@ -130,19 +140,36 @@ def main() -> None:
             "MDE同一定義,見results_summary.json的_cross_check_notes),不是各週報告"
             "顯示的複利版本。\n",
             "## 一、預測層改善 vs 策略層觀察差 vs 最小可偵測差\n",
-            "| 階段 | 預測層指標 | 預測層顯著性 | 策略層觀察差(算術Sharpe) | 策略層p值 | "
-            "最小可偵測差(MDE) | 觀察差是否達MDE |",
-            "|---|---|---|---|---|---|---|"]
+            "**判讀分兩類,不是同一種「測不到」**:",
+            "- **階段二**:MDE只有0.069,遠小於其他三階段——不同波動預測模型接同一套"
+            "vol_target部位規則後,產生的部位序列高度相關(配對比較的變異數小),檢定力本身",
+            "  夠高。觀察差0.003遠低於這個小的MDE門檻,這是**有檢定力支持的『沒有實質差異』**,",
+            "  不是測不到,是真的量不出差別。",
+            "- **階段三到五**:MDE落在0.7–0.8這個大得多的量級——樣本量(交易日數)沒有本質",
+            "  改變,但效果本身(篩選/狀態/CNN的貢獻)混在整體策略報酬的雜訊裡,檢定力不足。",
+            "  這三個階段是**偵測不到**,不是**偵測到沒有差異**——如果背後真有一個中等大小的",
+            "  效果,現有樣本量本來就看不出來,不能倒過來說『證明沒有效果』。\n",
+            "| 階段 | 預測層指標 | 預測層顯著性 | 策略層觀察差(算術Sharpe,保留正負號) | "
+            "策略層p值 | 最小可偵測差(MDE) | 達MDE? | 判讀 |",
+            "|---|---|---|---|---|---|---|---|"]
+    interp = {
+        "phase2": "有檢定力支持的沒有實質差異(MDE小,觀察差遠低於MDE)",
+        "phase3": "偵測不到(MDE大,檢定力不足;不代表沒有效果)",
+        "phase4": "偵測不到(MDE大,檢定力不足;不代表沒有效果)",
+        "phase5": "偵測不到(MDE大,檢定力不足;不代表沒有效果)",
+    }
     for r in rows:
         detectable = "是" if abs(r["strat_diff"]) >= r["mde"] else "否"
         lines.append(f"| {r['phase']} | {r['pred_metric']} | {r['pred_sig']} | "
-                     f"{r['strat_diff']:+.4f} | {r['strat_p']:.4f} | {r['mde']:.4f} | {detectable} |")
+                     f"{r['strat_diff']:+.4f} | {r['strat_p']:.4f} | {r['mde']:.4f} | "
+                     f"{detectable} | {interp[r['phase']]} |")
 
     lines += ["",
              "**型態很一致**:四個階段裡,預測層(QLIKE/AUC/外部驗證t值)常常有統計上站得住腳"
              "的訊號或差異,但策略層的觀察差全部遠小於5%顯著/80%檢定力下的最小可偵測差"
-             "(四階段都是「否」)——不是「這次剛好沒測到」,是現有樣本量在這個效果量級下,"
-             "本來就沒有機會可靠偵測到。",
+             "(四階段都是「否」)——但如上表「判讀」欄所分:階段二是量過、量出來真的很小"
+             "(有檢定力支持的沒有實質差異);階段三到五是根本量不到(檢定力不足),兩者結論"
+             "不能混為一談。",
              "",
              f"**第10週的反推**(`reports/week10_robustness.md`第五節):要用現有的資料頻率"
              f"偵測到0.2的夏普差,logistic模型需要約104年的OOS資料——這是全篇「為什麼難」"
