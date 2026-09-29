@@ -37,15 +37,24 @@ from src.models.base import load_predictions  # noqa: E402
 from sklearn.metrics import roc_auc_score  # noqa: E402
 
 REPORTS = ROOT / "reports"
+SEQ_DIR = dl.PROCESSED_DIR / "sequences"
 
 
 def jsonify(obj):
+    """Recursively convert to JSON-safe types. NaN -> None (json.dumps'
+    default allow_nan=True would otherwise emit a bare `NaN` token, which
+    is valid for Python's own parser but not standard JSON - e.g.
+    src.regime_eval._strategy_score leaves mean_r_net/mean_n_segments NaN
+    for whichever strategy they don't apply to)."""
     if isinstance(obj, dict):
         return {k: jsonify(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [jsonify(v) for v in obj]
     if isinstance(obj, (np.floating, np.integer)):
-        return obj.item()
+        v = obj.item()
+        return None if isinstance(v, float) and np.isnan(v) else v
+    if isinstance(obj, float) and np.isnan(obj):
+        return None
     if isinstance(obj, np.bool_):
         return bool(obj)
     if isinstance(obj, (pd.Timestamp,)):
@@ -282,6 +291,62 @@ def phase5() -> dict:
     }
 
 
+def robustness_gaps() -> dict:
+    """Week 14 (config/week14_final.toml [gapfill.*]): fold the five
+    robustness-matrix gap-fill results (scripts/run_week14_robustness.py)
+    into results_summary.json. Read-only here - the actual computation
+    already ran and wrote data/processed/sequences/week14_*; this just
+    re-shapes it under a stable key. None of these results contradict any
+    earlier week's conclusion (see reports/final_report.md's discussion),
+    so no correction-log entry was needed for them."""
+    gaps = json.loads((SEQ_DIR / "week14_robustness_gaps.json").read_text(encoding="utf-8"))
+    phase3_yearly = pd.read_parquet(SEQ_DIR / "week14_phase3_yearly.parquet")
+
+    return {
+        "phase2": {
+            "random_baseline": {
+                **gaps["phase2_random_baseline"],
+                "design_note": "打亂har_resid_xgb的y_pred_var在日期間的對應(fold/校準比例"
+                              "不動),接回同一套vol_target部位規則,p=null>=observed的比例"
+                              "(單尾,跟week8 random_filter_p_value同一套邏輯)。這個檢定回答"
+                              "的問題跟階段二主比較(HAR+殘差XGB vs HAR)不同——這裡問的是"
+                              "『用任何一組跟真實預測同尺度但日期打亂的變異數估計去做波動"
+                              "目標部位,能不能跟這個模型的實際表現一樣好』,不是『這個模型"
+                              "比另一個模型準不準』。p=0.031單一檢定,不是本專案原本四項"
+                              "標準的一部分,解讀要保守。",
+            },
+        },
+        "phase3": {
+            "cost_doubling": {
+                **gaps["phase3_cost_doubling"],
+                "design_note": "ORBConfig/VWAPConfig的cost_per_share加倍(0.0045→0.009/股),"
+                              "run_orb/run_vwap只在記憶體內重算,不覆蓋orb_daily.parquet/"
+                              "vwap_daily.parquet。tradability_test內部會重新呼叫"
+                              "fit_hmm_fold_main,但該函式random_state=0寫死、確定性配適,"
+                              "重跑會重現跟regime_labels_main_k3.parquet完全相同的狀態指派"
+                              "(不是產生新的模型決定),只有策略自己的bps_return因成本改變"
+                              "而不同。ORB/VWAP兩者在雙倍成本下,篩選vs不篩選的方向"
+                              "(filtered更差)跟主成本下完全一致,結論不變。",
+            },
+            "yearly": phase3_yearly.to_dict(orient="records"),
+        },
+        "phase4": {
+            "target_r_sensitivity": gaps["phase4_target_r_sensitivity"],
+        },
+        "phase5": {
+            "yearly": gaps["phase5_yearly_and_cost"]["yearly"],
+            "n_years_filtered_better": gaps["phase5_yearly_and_cost"]["n_years_filtered_better"],
+            "n_years_total": gaps["phase5_yearly_and_cost"]["n_years_total"],
+            "cost_doubling": {
+                **gaps["phase5_yearly_and_cost"]["cost_2x"],
+                "design_note": "CNN(task A)篩選keep決定不變(不重新訓練CNN),只把ORBConfig"
+                              "的cost_per_share加倍重跑run_orb,套用同一組CNN keep決定——"
+                              "雙倍成本下篩選仍比不篩選差(diff同號),跟主成本下的結論一致。",
+            },
+        },
+    }
+
+
 def _direction_check(summary: dict) -> list[dict]:
     """Week 13 (per-user follow-up): after switching results_summary.json's
     main sharpe/diff fields from compounding to arithmetic, confirm every
@@ -323,6 +388,7 @@ def main() -> None:
         ],
         "_direction_check": direction_check,
         **phases,
+        "robustness_gaps": robustness_gaps(),
     }
     summary = jsonify(summary)
     p = REPORTS / "results_summary.json"

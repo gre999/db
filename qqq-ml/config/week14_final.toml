@@ -1,0 +1,80 @@
+# Week 14 (final week): robustness matrix, final report, reproducibility,
+# defense prep. Written and reviewed BEFORE filling any gap, per this
+# project's standing discipline. No new research question, no changed
+# conclusion - every gap filled here is a robustness check applied to an
+# already-frozen model/rule, using already-established parameters
+# (cost assumptions, ORB's own target_r, random-null methodology) that
+# earlier weeks already used elsewhere in the project. Any result that
+# conflicts with an earlier week's conclusion is written into the
+# correction log honestly, not smoothed over.
+
+# =====================================================================
+# Part 1: robustness matrix (shown to user before any gap is filled)
+# =====================================================================
+# Verified via direct file/line citation (own reading + an Explore agent
+# cross-check), not from memory. "DONE" cites the exact week+location;
+# "PARTIAL"/"NOT DONE" explains exactly what's missing.
+
+[matrix.phase2]
+weeks = [3, 4, 5]
+yearly = { status = "DONE", cite = "week05_position.md 第五節「逐年夏普與危機切片」(逐年Sharpe表 + covid_2020/tariff_2025切片)" }
+cost_doubling = { status = "DONE", cite = "week05_position.md 第九節/make_week05_report.py:188-194,cost_bps=3.0 對照主設定cost_bps=1.0(src/backtest.py:59)——以3倍涵蓋,較規劃的2倍更嚴格,結論(HAR≈HAR+殘差XGB)在這個更大的成本壓力測試下仍成立,使用者確認不需另補字面2倍版本" }
+parameter_sensitivity = { status = "DONE", cite = "week05_position.md 第九節,vol_target×leverage_cap 3×3=9組網格(make_week05_report.py:207-219)" }
+random_baseline = { status = "NOT DONE", gap = "沒有「打亂波動預測的日期、接回同一套部位規則」這種隨機基準檢查;週5唯一的「permutation」是樹模型的permutation importance,不是隨機空模型檢定" }
+
+[matrix.phase3]
+weeks = [6, 7]
+yearly = { status = "NOT DONE", gap = "src/regime_eval.py 的 state_performance_by_year 函式存在且有單元測試(tests/test_regime_eval.py:252),但 make_week06/07_report.py 都沒有呼叫它——是死碼,沒有任何逐年表進到報告裡" }
+cost_doubling = { status = "NOT DONE", gap = "week06_regimes.md 第二節的「主成本vs論文近零成本」是論文複現的敏感度檢查,不是「主成本加倍」;沒有針對HMM/KMeans狀態篩選ORB/VWAP的成本加倍版本" }
+parameter_sensitivity = { status = "DONE", cite = "week07_regime_eval.md 第六節「k=4穩健性對照」,ORB/VWAP×HMM/KMeans在k=4下重跑,對照主結果k=3" }
+random_baseline = { status = "DONE", cite = "week07_regime_eval.md 第三節,label_block_shuffle_null(1000次區塊洗牌狀態標籤),p_vs_random_labeling欄位" }
+
+[matrix.phase4]
+weeks = [8, 9, 10]
+yearly = { status = "DONE", cite = "week08_filter_baseline.md 逐年勝率/淨R表 + week10_robustness.md 第二節「逐年拆解」(7/9年篩選後夏普較高)" }
+cost_doubling = { status = "DONE", cite = "week10_robustness.md 第一節「滑價加倍、手續費加倍」,make_week10_report.py:143-145 / src/filter_eval.py:354-356,2x_slippage/2x_commission,字面上的2倍" }
+parameter_sensitivity = { status = "DONE", cite = "week10_robustness.md,保留比例網格10%→5%、驗證段1年→2年" }
+random_baseline = { status = "DONE", cite = "week08_filter_baseline.md,random_filter_p_value(p95/平均 vs 觀察值)" }
+extra_gap = "使用者另外指定:ORB停利R倍數敏感度(5R/10R/15R)——src/rules.py ORBConfig.target_r 預設10.0(已符合論文),搜過全部ORBConfig(...)呼叫點(week10的2x_slippage/2x_commission、src/filter_eval.py、tests/test_rules.py),沒有一個改過target_r。這是真正的空白,不是遺漏引用——10R是既有預設,5R/15R是這次要新增的兩個對照點。"
+
+[matrix.phase5]
+weeks = [11, 12, 13]
+yearly = { status = "NOT DONE", gap = "week11/12/13三份報告跟stage5_chapter.md都沒有CNN策略層的逐年拆解" }
+cost_doubling = { status = "NOT DONE", gap = "沒有CNN篩選/堆疊策略層的成本加倍版本" }
+parameter_sensitivity = { status = "PARTIAL", basis = "架構本身的敏感度(換架構/超參數)不重開——凍結是本專案既有紀律(config/week12_dl.toml [inherited_from_week11]),本週指示下不重新打開這個決定,不算「補做」的範圍。但已有的兩個間接證據可以部分回答『結論對設計選擇穩不穩健』:(1)任務B的N=15、N=30兩個獨立時間窗給出一致結論(AUC層與策略層都接近隨機),不是單一窗口的偶然;(2)每折5個固定種子的CNN測試AUC範圍(week12_task_a_fold_diagnostics.parquet的test_auc_seed_min/max)顯示初始化變異的量級,可以判斷『CNN比手工特徵差』這個結論會不會只是運氣差的初始化——第12週已經算過、只是沒有明確定位成『參數敏感度』這個框架來寫。第14週把這兩點重新整理進報告,說明架構凍結為什麼不重開,不是回頭改結論。" }
+random_baseline = { status = "DONE", cite = "week12_dl_walkforward.md 第四節,FE.random_filter_p_value,CNN rand_p=0.2392、堆疊rand_p=0.1343(n_reps=10000)" }
+
+# =====================================================================
+# Part 1b: gap-fill plan (only for cells marked NOT DONE/PARTIAL above,
+# pending user confirmation of the matrix itself)
+# =====================================================================
+[gapfill.phase2_random_baseline]
+design = "打亂波動預測的『日期標籤』(不打亂數值本身,而是把har_resid_xgb的預測序列在時間軸上隨機重新指派日期,模擬『這個部位規則本來就會產生的夏普,不靠預測準不準』的零假設),接回同一套vol_target部位規則(cfg.vol_target=0.15),跑n_reps=1000次,報告觀察夏普在這個空分布的百分位——跟week8的random_filter_p_value同一套邏輯,對象換成連續部位權重而不是離散篩選"
+n_reps = 1000
+seed = 0
+
+[gapfill.phase3_cost_doubling]
+design = "ORBConfig/VWAPConfig的cost_per_share加倍(主設定MAIN_COMMISSION+MAIN_SLIPPAGE的2倍),重跑run_orb/run_vwap(記憶體內,不寫回orb_daily.parquet/vwap_daily.parquet),用已經凍結的HMM狀態標籤(regime_labels_main_k3.parquet,不重新配適)重算tradability_test的filtered/unfiltered夏普,對照主成本下的結論方向"
+
+[gapfill.phase4_target_r_sensitivity]
+design = "ORBConfig(target_r=5.0)與ORBConfig(target_r=15.0)各重跑一次run_orb(對照既有預設target_r=10.0的orb_daily.parquet,不重算),用已經凍結的week8 logistic篩選模型的keep欄位(week08_filter.parquet,以10R標籤訓練得出的篩選決定)套用到這兩個新的每日結果上——檢驗的是「同一批被10R模型選中的日子」換算到5R/15R的報酬定義下是否仍然較好,不重新訓練篩選模型,不重新選門檻。"
+
+[gapfill.phase5_yearly_and_cost]
+design = "CNN(task A)篩選策略層的filtered/unfiltered報酬序列(week12_task_a_cnn_filter.parquet,已存在)逐年拆解Sharpe;成本加倍版本需要重新生成CNN filter的keep決策——但CNN分數本身不受交易成本影響,只有ORB自己的bps_return受影響,所以做法是:沿用已凍結的CNN keep決策不變,只把ORBConfig的cost_per_share加倍重跑run_orb,套用同一組keep天數,比較filtered/unfiltered夏普差在雙倍成本下是否同方向"
+
+[gapfill.phase3_yearly_activation]
+design = "state_performance_by_year函式已存在且有測試,純粹是報告沒呼叫——不是新檢查,是把既有函式的輸出寫進results_summary.json,零風險"
+
+note_before_running = "以上五格gapfill只在使用者確認矩陣本身之後才開始執行,不預先跑。"
+
+# =====================================================================
+# Part 1c: gap-fill RESULTS (filled after execution; none contradict any
+# earlier week's conclusion, so no new correction-log entry was needed)
+# =====================================================================
+[gapfill_results]
+phase2_random_baseline = "observed(算術Sharpe)=1.1257,null平均=0.9148,null第95百分位=1.0928,p=0.031(單尾,SE=0.0055,n_reps=1000)。實際模型排在隨機打亂日期分布的前96.9%——但這個檢定回答的問題跟階段二主比較不同(見design_note),p=0.031是單一新檢定,不併入原本四項標準。"
+phase3_cost_doubling = "ORB:篩選0.226 vs不篩選0.358(diff=-0.131,p=0.597);VWAP:篩選0.043 vs不篩選0.204(diff=-0.162,p=0.459)。雙倍成本下兩者都是篩選更差,跟主成本下的方向完全一致,結論不變。"
+phase3_yearly_activation = "96格(2策略×2模型×3狀態×8年)。用mean_bps判斷年度正負一致性(注意:mean_r_net只對ORB有定義,VWAP要看mean_bps,已修正一次分析錯誤):最一致的是state 0(ORB/KMeans、VWAP/KMeans都是7/8年為正),最不一致的是state 2(ORB/KMeans、VWAP/KMeans都只有2/8年為正)。沒有一個狀態連續8年同向,支持第三節「0/18顯著」的既有結論——狀態效果沒有年度一致性,不是新結論,是既有結論多一層佐證。"
+phase4_target_r_sensitivity = "target_r=5:篩選0.780 vs不篩選0.540(diff=0.240,p=0.307);target_r=15:篩選0.754 vs不篩選0.607(diff=0.146,p=0.544)。篩選優於不篩選的方向在5R、10R(主結果diff=0.171,p=0.485)、15R三個停利定義下一致,三個都不顯著——跟主結果『方向正但不顯著』的型態吻合,不是矛盾。"
+phase5_yearly_and_cost = "CNN篩選8年中只有4年優於不篩選(4/8,沒有一致優勢,呼應主結論的『沒有增量資訊』);雙倍成本下diff=-0.181(p=0.515),跟主成本下diff=-0.200同號,篩選仍差於不篩選,結論不變。"
+json_bug_fixed = "collect_results.py的jsonify()原本會讓NaN以裸token寫進JSON(Python json模組預設allow_nan=True,但不是標準JSON)——VWAP/ORB各自只定義mean_r_net或mean_n_segments/mean_cost_bps其中一組,另一組是NaN,寫進week14 phase3逐年資料時第一次觸發。已修正成NaN→null,用嚴格JSON解析器驗證過(parse_constant拋錯)確認沒有殘留NaN token。"
