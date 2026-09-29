@@ -168,7 +168,19 @@ def set_notes(slide, text: str) -> None:
 def build(prs: Presentation, n: dict) -> None:
     # 1. Cover
     s = new_slide(prs)
-    box = s.shapes.add_textbox(Inches(1.0), Inches(2.4), Inches(11.3), Inches(1.6))
+    course = s.shapes.add_textbox(Inches(1.0), Inches(1.15), Inches(11.3), Inches(0.9))
+    ctf = course.text_frame
+    ctf.word_wrap = True
+    cp = ctf.paragraphs[0]
+    cr = cp.add_run()
+    cr.text = "115年Python程式設計與AI應用-第二期"
+    cr.font.name, cr.font.size, cr.font.color.rgb = FONT, Pt(18), INK_2
+    cp2 = ctf.add_paragraph()
+    cr2 = cp2.add_run()
+    cr2.text = "期末專題"
+    cr2.font.name, cr2.font.size, cr2.font.color.rgb = FONT, Pt(18), MUTED
+
+    box = s.shapes.add_textbox(Inches(1.0), Inches(2.55), Inches(11.3), Inches(1.6))
     tf = box.text_frame
     tf.word_wrap = True
     p = tf.paragraphs[0]
@@ -179,11 +191,12 @@ def build(prs: Presentation, n: dict) -> None:
     r2 = p2.add_run()
     r2.text = "一個 14 週的實證研究"
     r2.font.name, r2.font.size, r2.font.color.rgb = FONT, Pt(22), INK_2
+
     sub = s.shapes.add_textbox(Inches(1.0), Inches(5.8), Inches(11.3), Inches(1.0))
     stf = sub.text_frame
     sp = stf.paragraphs[0]
     sr = sp.add_run()
-    sr.text = "gre888"
+    sr.text = "黃家輝  學號09"
     sr.font.name, sr.font.size, sr.font.color.rgb = FONT, Pt(18), INK_2
     sp2 = stf.add_paragraph()
     sr2 = sp2.add_run()
@@ -316,15 +329,15 @@ def build(prs: Presentation, n: dict) -> None:
     # 10. 修正紀錄
     s = new_slide(prs)
     add_title(s, "方法論紀律真的擋下了看似顯著的假結果", size=27)
-    add_table(s, ["週", "問題", "怎麼發現的"],
-             [["6", "HMM樣本外解碼漏轉移步驟", "寫測試時主動發現,看任何結果前就修正"],
-              ["8", "三項成功標準字面上全過", "使用者要求補四項檢查後,推翻字面結論"],
-              ["10", "排序層p值換種子會跳動", "查出是蒙地卡羅精度不足,不是真的不穩健"]],
+    add_table(s, ["週", "問題", "發現方式"],
+             [["5", "20日歷史波動前視偏誤", "看到異常結果後查時間對齊(p=0.001→0.85)"],
+              ["6", "HMM濾波漏轉移", "看結果前由測試抓到"],
+              ["8", "成功標準不足", "追加檢定發現原標準不夠嚴格"]],
              Inches(0.6), Inches(1.9), Inches(12.1), Inches(2.6), font_size=16)
-    add_bullets(s, ["完整6條記錄在附錄A,每條都寫發現方式、影響範圍、修正後結論"],
-               top=Inches(4.8), size=18, height=Inches(0.8))
-    set_notes(s, "只挑3條最能展示『紀律有實際作用』的,不是列滿6條。強調第6週那條是"
-             "主動發現、不是被結果異常倒逼。對應問答:第6題。")
+    add_bullets(s, ["完整六條見報告附錄"], top=Inches(4.8), size=18, height=Inches(0.8))
+    set_notes(s, "三條分別代表三種發現方式:事後查時間對齊(週5)、寫測試主動抓到"
+             "(週6)、追加檢定才發現標準不夠嚴格(週8)——不是同一種模式重複三次。"
+             "對應問答:第6題。")
     add_page_number(s, 10)
 
     # 11. 限制
