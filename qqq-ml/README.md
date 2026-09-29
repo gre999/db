@@ -45,6 +45,26 @@ from src.validation import WalkForwardSplit, make_pipeline, walk_forward_predict
 print(WalkForwardSplit().describe(X.dropna().index))
 ```
 
+## 期末報告(PDF)
+
+```cmd
+:: 一次跑完整個管線(週1到週14)並產生 reports\final_report.pdf
+.venv\Scripts\python scripts\run_all.py
+
+:: CNN(週11-13)訓練很慢,可跳過重訓、沿用 data\processed\predictions\ 已存的預測檔
+.venv\Scripts\python scripts\run_all.py --skip-cnn
+
+:: 只重新產生期末報告(套用 results_summary.json 最新數字)與 PDF,不重跑任何分析
+.venv\Scripts\python scripts\run_all.py --pdf-only
+```
+
+PDF 轉換需要事先安裝(僅需一次):
+```cmd
+winget install JohnMacFarlane.Pandoc
+winget install MiKTeX.MiKTeX
+```
+中文字型用系統內建的 Noto Sans TC(Windows 內附,`C:\Windows\Fonts\NotoSansTC-VF.ttf`)——`reports\final_report_template.md` 的 YAML 開頭已指定 `mainfont`/`CJKmainfont: "Noto Sans TC"`,不需另外安裝字型。`reports\final_report.md` 是範本(`final_report_template.md`)套用 `scripts\make_final_report.py` 從 `reports\results_summary.json` 填入數字後產生的,不要直接編輯 `final_report.md` 本身。
+
 ## 結構
 - `data/raw/`：原始資料，永不修改（不進 git）
 - `data/processed/`：清理後的 parquet（不進 git）
