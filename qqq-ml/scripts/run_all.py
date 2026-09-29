@@ -12,11 +12,26 @@ predictions/ instead of retraining (the final report's numbers come from
 those saved predictions either way - retraining only re-verifies they are
 reproducible, it does not change what the report says).
 
+Weeks 1-4 only rebuild data/processed/ (data_loader, features, HAR
+baselines, week 4 models) by default - their own reports (reports/
+week01_data_quality.md etc.) are NOT regenerated. Those report scripts
+read src/features.py and src/data_loader.py as they exist TODAY, not as
+they existed in week 1-4 - both modules grew new feature columns and
+tests in later weeks, so regenerating an early week's report today
+would silently diverge from the historical version committed to git at
+the time (confirmed during week 14's clean-venv reproducibility check -
+see README.md's "可重現性" section). Pass --rebuild-early-reports to
+regenerate them anyway (e.g. to see how they'd read against the current
+codebase) - nothing downstream depends on these four report files, only
+on the data/processed/ and data/processed/predictions/ files those weeks
+produce.
+
 Usage:
     python scripts/run_all.py                  # full run, retrains CNN
     python scripts/run_all.py --skip-cnn        # skip weeks 11-13 training
     python scripts/run_all.py --from-week 8     # resume from a given week
     python scripts/run_all.py --pdf-only        # only (re)build the PDF
+    python scripts/run_all.py --rebuild-early-reports  # also redo weeks 1-4's own .md reports
 """
 from __future__ import annotations
 
@@ -40,17 +55,22 @@ def run(cmd: list[str], label: str) -> None:
     print(f"--- {label} done in {time.time() - t0:.1f}s ---", flush=True)
 
 
-def build_steps(skip_cnn: bool) -> list[tuple[int, str, list[str]]]:
+def build_steps(skip_cnn: bool, rebuild_early_reports: bool = False) -> list[tuple[int, str, list[str]]]:
     """(week, label, argv) - argv[0] is always PY."""
     steps = [
         (1, "data loader (clean raw -> data/processed/)", [PY, "-m", "src.data_loader"]),
-        (1, "week 1 report", [PY, "scripts/make_week01_report.py"]),
         (2, "features", [PY, "-m", "src.features"]),
-        (2, "week 2 report", [PY, "scripts/make_week02_report.py"]),
         (3, "HAR baselines", [PY, "-m", "src.models.har"]),
-        (3, "week 3 report", [PY, "scripts/make_week03_report.py"]),
         (4, "week 4 models (HAR-X, XGBoost, RF)", [PY, "-m", "src.models.week4"]),
-        (4, "week 4 report", [PY, "scripts/make_week04_report.py"]),
+    ]
+    if rebuild_early_reports:
+        steps += [
+            (1, "week 1 report (--rebuild-early-reports)", [PY, "scripts/make_week01_report.py"]),
+            (2, "week 2 report (--rebuild-early-reports)", [PY, "scripts/make_week02_report.py"]),
+            (3, "week 3 report (--rebuild-early-reports)", [PY, "scripts/make_week03_report.py"]),
+            (4, "week 4 report (--rebuild-early-reports)", [PY, "scripts/make_week04_report.py"]),
+        ]
+    steps += [
         (5, "week 5 report (runs the main backtest, save=True)", [PY, "scripts/make_week05_report.py"]),
         (6, "rule strategies + regime labels", [PY, "-m", "src.rules"]),
         (6, "week 6 report", [PY, "scripts/make_week06_report.py"]),
@@ -123,13 +143,17 @@ def main() -> None:
                     help="Resume from this week number (skips earlier steps).")
     ap.add_argument("--pdf-only", action="store_true",
                     help="Only run scripts/make_final_report.py + the pandoc PDF build.")
+    ap.add_argument("--rebuild-early-reports", action="store_true",
+                    help="Also regenerate weeks 1-4's own .md reports (overwrites the "
+                        "git-committed historical versions with today's src/ state - see "
+                        "the module docstring). Off by default.")
     args = ap.parse_args()
 
     t_start = time.time()
     if args.pdf_only:
         run([PY, "scripts/make_final_report.py"], "final_report.md from template")
     else:
-        for week, label, cmd in build_steps(args.skip_cnn):
+        for week, label, cmd in build_steps(args.skip_cnn, args.rebuild_early_reports):
             if week < args.from_week:
                 continue
             run(cmd, f"week {week}: {label}")

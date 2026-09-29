@@ -76,7 +76,9 @@ winget install MiKTeX.MiKTeX
 
 跑完後核對 `reports/results_summary.json`:除了浮點數在小數點後第13位左右的雜訊(不同執行緒/BLAS加總順序造成,例如 `-0.0025998316877138272` 對 `-0.0025998316877140493`)以外,全部數字一致——四捨五入到報告實際顯示的位數後完全相同,`final_report.md`/`final_report.pdf` 逐字未變。
 
-**已知現象,不是bug**:週1–4的報告腳本(`make_week01_report.py` 等)讀的是**目前**的 `src/features.py`/`src/data_loader.py`,不是「那一週當時」凍結的版本——這幾個模組後來的週次持續加了新特徵欄位、新測試。所以今天重新產生週2報告,會比 git 裡週2當初提交的版本多出後來才加的特徵(`overnight_gap_1d`、`atr_20d` 等)與更多測試筆數,這是正常的、預期中的行為(這些腳本本來就沒有依週版本化凍結),重新產生**不會**覆蓋 git 裡週2-4當初提交的歷史報告版本——本次驗證時特別檢查過這點,把這四份報告的意外變動 revert 回去,只保留 `requirements*.txt` 鎖版本這個真正要改的地方。真正代表「可重現性」驗證對象的是 `results_summary.json` 與 `final_report.pdf`,兩者在乾淨環境下確認過對得上。
+**已知現象,不是bug**:週1–4的報告腳本(`make_week01_report.py` 等)讀的是**目前**的 `src/features.py`/`src/data_loader.py`,不是「那一週當時」凍結的版本——這幾個模組後來的週次持續加了新特徵欄位、新測試。所以今天重新產生週2報告,會比 git 裡週2當初提交的版本多出後來才加的特徵(`overnight_gap_1d`、`atr_20d` 等)與更多測試筆數。第一次做這個驗證時是事後把這四份報告的意外變動手動 revert 回去;現在 `scripts/run_all.py` 預設**只重建週1–4的 `data/processed/`,不覆蓋這四份報告**(週5以後的管線只需要前者),要重新產生報告本身得另外加 `--rebuild-early-reports` 選項才會動到,不會在照 README 正常重跑時意外改到當週報告。真正代表「可重現性」驗證對象的是 `results_summary.json` 與 `final_report.pdf`,兩者在乾淨環境下確認過對得上。
+
+**CNN 訓練確定性抽驗**:上面的 `--skip-cnn` 全流程只驗證了「用已存的CNN預測檔重算後面的分析,結果一致」,沒有驗證「CNN訓練本身跨環境可重現」。另外在一個乾淨 venv(同樣鎖定版本、含CPU版torch)裡,用 `scripts/verify_cnn_determinism.py --fold 1` 重新訓練任務A第1折的CNN(5個固定種子、確定性模式,跟 `run_week12_cnn_walkforward.py` 同一套程式碼路徑),逐日比對跟 `data/processed/predictions/week12_task_a_cnn.parquet` 已存的機率——**250天全部逐位元相同(max_abs_diff=0.0)**,不是量級接近,是完全一致。確認 CNN 訓練在固定種子、`torch.use_deterministic_algorithms(True)` 下,換一台全新安裝的環境重跑也不會漂移。
 
 ## 結構
 - `data/raw/`：原始資料，永不修改（不進 git）
